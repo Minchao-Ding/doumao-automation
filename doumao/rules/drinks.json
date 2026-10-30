@@ -1,0 +1,10 @@
+{
+  "folder": "饮品",
+  "rule_type": "replace_unique_separator",
+  "old_separator": " ",
+  "new_separator": "｜",
+  "forbid_existing": [
+    "｜"
+  ],
+  "max_length": 64
+}
