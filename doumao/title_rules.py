@@ -41,9 +41,62 @@ def load_rule(path=None):
     return spec
 
 
+def transform_text(title: str, rule: dict) -> str | None:
+    """Reusable text-only operations; exact user data lives in CLI arguments.
+
+    No character/IP/collection names are built into this module.  For search
+    queue mode, the postcondition guards search-result removal before saving.
+    """
+    if not isinstance(title, str) or not title or any(c in title for c in ('\r','\n','\x00')):
+        raise ValueError('Invalid original title')
+    kind = rule.get('rule_type')
+    if kind == 'remove_prefix':
+        prefix = rule.get('prefix')
+        if not isinstance(prefix, str) or not prefix:
+            raise ValueError('A nonempty exact prefix is required')
+        if not title.startswith(prefix):
+            return None
+        updated = title[len(prefix):]
+    elif kind == 'replace_text':
+        source, target = rule.get('old'), rule.get('new')
+        if not isinstance(source, str) or not source or not isinstance(target, str) or source == target:
+            raise ValueError('A nonempty old string and different replacement are required')
+        if source not in title:
+            return None
+        updated = title.replace(source, target)
+    elif kind == 'append_suffix':
+        suffix = rule.get('suffix')
+        delimiter = rule.get('delimiter', '｜')
+        forbidden = rule.get('forbid_other', [])
+        if not isinstance(suffix, str) or not suffix or not isinstance(delimiter, str):
+            raise ValueError('Invalid suffix or delimiter')
+        if not isinstance(forbidden, list) or not all(isinstance(s, str) for s in forbidden):
+            raise ValueError('Invalid conflict list')
+        if suffix in title or any(s and s in title for s in forbidden):
+            return None
+        updated = title + delimiter + suffix
+    else:
+        raise ValueError(f'Unsupported title rule: {kind!r}')
+
+    if not updated or not updated.strip() or any(c in updated for c in ('\r','\n','\x00')):
+        raise ValueError('Refusing invalid transformed title')
+    if len(updated) > rule.get('max_length', 64):
+        raise ValueError('Transformed title exceeds supported editor length')
+    # Only the search-result queue requires that the edited card disappears.
+    search_term = rule.get('search_must_disappear')
+    if search_term is not None:
+        if not isinstance(search_term, str) or not search_term or search_term not in title:
+            raise ValueError('The actual original title does not contain the expected search text')
+        if search_term in updated:
+            raise ValueError('The replacement still matches the search; queue mode is unsafe')
+    return updated
+
+
 def proposal(old, rule=None):
     """纯函数：依据规则与实际文本提出修改，不依赖任何作品名称或坐标。"""
     spec = rule if rule is not None else DEFAULT_RULE
+    if spec.get('rule_type') != 'replace_unique_separator':
+        return transform_text(old, spec)
     if not old or old != old.strip() or len(old) > spec['max_length']:
         return None
     if any(c in old for c in ('\n','\r','\t','\u3000')):

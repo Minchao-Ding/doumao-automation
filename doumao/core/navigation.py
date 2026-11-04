@@ -15,6 +15,25 @@ ROOT = Path.home() / 'doumao-automation'
 OUTPUT = ROOT / 'screenshots' / 'preview_navigation.png'
 
 
+def _left_list_card(frame, rect):
+    """Reject a pale-blue list card masquerading as a white detail modal.
+
+    This belongs inside candidate filtering: patching only the final result
+    misses the case where a real dialog and a list card are both candidates.
+    """
+    x, y, ww, hh = rect
+    H, W = frame.shape[:2]
+    if (x + ww / 2) / W >= .33:
+        return False
+    count = 0
+    for fx, fy in ((.10, .09), (.90, .09), (.10, .50), (.90, .50)):
+        xx, yy = min(W - 1, int(x + ww * fx)), min(H - 1, int(y + hh * fy))
+        b, g, r = (int(v) for v in frame[yy, xx])
+        if 243 <= r <= 250 and g >= 248 and b >= 250 and b - r >= 4:
+            count += 1
+    return count >= 3
+
+
 def find_detail_modal(frame):
     """从屏幕截图里找居中的白色作品详情弹窗，而不是固定屏幕区域。"""
     h, w = frame.shape[:2]
@@ -31,7 +50,10 @@ def find_detail_modal(frame):
             continue
         if (x + ww/2) > .61*w:
             continue
-        candidates.append((pixels, (x, y, ww, hh)))
+        rect = (x, y, ww, hh)
+        if _left_list_card(frame, rect):
+            continue
+        candidates.append((pixels, rect))
     if len(candidates) != 1:
         return None
     return candidates[0][1]
