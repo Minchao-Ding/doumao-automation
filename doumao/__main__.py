@@ -30,6 +30,8 @@ def build_parser():
     title.add_argument('--current-screen-only',action='store_true')
     title.add_argument('--expect-visible',type=int,default=None)
     title.add_argument('--expected-changes',type=int,default=None)
+    visible=sub.add_parser('visible-order', help='交互式可视区域顺序改名（完整覆盖标题）')
+    visible.add_argument('--preview', action='store_true', help='仅查看位置映射，不打开作品或保存')
     queue=sub.add_parser('search-queue', help='对当前手动搜索结果逐张改名：去前缀或替换文字')
     queue.add_argument('--mode', choices=('remove-prefix','replace'))
     queue.add_argument('--search', help='用户已在豆猫中手动输入的搜索词')
@@ -70,6 +72,9 @@ def main():
             expect_visible=args.expect_visible, expected_changes=None,
             list_preview=True)
         return guarded(lambda: normalize_titles.run(readargs), normalize_titles.diagnostics)
+    if args.command == 'visible-order':
+        from .workflows import visible_order_rename as workflow
+        return guarded(lambda: workflow.run(preview_only=args.preview), workflow.diagnostic)
     if args.command == 'search-queue':
         settings = {}
         if args.config:

@@ -75,6 +75,12 @@ def transform_text(title: str, rule: dict) -> str | None:
         if suffix in title or any(s and s in title for s in forbidden):
             return None
         updated = title + delimiter + suffix
+    elif kind == 'replace_entire_title':
+        updated = rule.get('new')
+        if not isinstance(updated, str):
+            raise ValueError('Exact replacement title must be a string')
+        if updated == title:
+            return None
     else:
         raise ValueError(f'Unsupported title rule: {kind!r}')
 

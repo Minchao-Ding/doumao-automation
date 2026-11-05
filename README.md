@@ -1,238 +1,199 @@
 # Doumao Automation
 
-**Computer Vision–Based macOS GUI Automation for Personal Visual Asset Library Management**
+**Computer Vision–Based macOS GUI Automation for Visual Asset Library Management**
 
-A Python automation project developed to streamline the organization and maintenance of a personal visual asset library.
-
-Doumao Automation uses computer vision and GUI interaction to identify library items, navigate editing interfaces, update metadata, and process collections through repeatable, rule-based workflows.
+Doumao Automation is a Python tool for organizing visual assets in a macOS desktop application. It combines computer vision and GUI automation to locate item cards, edit titles and metadata, and process collections through reusable workflows.
 
 ## Project Highlights
 
-| Metric | Result |
+| Milestone | Result |
 | --- | --- |
-| Library items organized | **30** |
-| Titles standardized | **12** |
-| Core automation workflows | **2** |
-| Automated tests passed | **9** |
-
-The first use case was a 30-item collection in a macOS desktop library application, covering metadata cleanup and title standardization.
+| Metadata-cleanup collection | **30 items** organized |
+| Rule-based title standardization | **11 titles** automatically standardized |
+| Search-result queue renaming | **34 titles** renamed |
+| Visible-order collection | **176 items** organized |
+| Automation workflows | **4** |
+| Automated regression tests | **132 passed** |
 
 ## Key Features
 
 ### 1. Automated Metadata Cleanup
 
-Identifies library items requiring metadata updates and performs the editing workflow automatically.
+Processes item metadata through visual detection and GUI interaction.
 
-- Detects tagged item cards using OpenCV.
-- Opens item details and navigates to the editing interface.
-- Clears notes and removes selected tags according to the processing rules.
-- Dynamically relocates UI elements as tags are removed.
-- Saves changes and verifies the updated list view.
-- Skips items that do not meet the processing criteria.
+- Locates item cards, detail views, and editing controls using screenshots.
+- Clears notes and removes selected tags according to the workflow rules.
+- Re-detects controls as the layout changes after each removal.
+- Saves updates and checks the return to the collection view.
 
 ### 2. Rule-Based Title Standardization
 
-Reads item titles directly from the editing interface and applies configurable naming rules.
+Reads item titles in the editor and applies configurable naming rules.
 
-For example:
+- Separates title-transformation rules from GUI navigation.
+- Reads the original title and verifies the updated text before saving.
+- Processes matching items and retains other titles.
+- Supports preview and bounded batch processing.
 
-```text
-Before: Sample Alpha
-After:  Sample｜Alpha
+### 3. Search-Result Queue Renaming
 
-Before: Sample Beta
-After:  Sample｜Beta
-```
+Renames items sequentially within a search result list filtered in the desktop application.
 
-The workflow:
+- Removes an exact prefix or replaces specified text.
+- Opens the current result, updates its title, and checks the result-list transition after saving.
+- Handles different items with identical titles.
+- Tracks completed edits, uncertain saves, and queue completion.
+- Produces structured logs and diagnostic screenshots.
 
-1. Discovers item cards from the collection view.
-2. Opens each item and retrieves its original title.
-3. Evaluates the title against a transformation rule.
-4. Applies the change when appropriate.
-5. Reads back the updated title to verify correctness.
-6. Saves the update and continues scanning.
+See [Search-result queue design](docs/SEARCH_QUEUE.md).
 
-Title transformations are separated from GUI operations, allowing new naming rules to be introduced independently.
+### 4. Visible-Order Batch Renaming (v3.5)
 
-### 3. Computer Vision and GUI Navigation
+Renames cards in their displayed grid order using names supplied through the terminal.
 
-The automation framework combines screenshot analysis with mouse and keyboard interaction to work with a macOS desktop application's visual interface.
+- Detects and orders cards from grid geometry and screenshots.
+- Accepts a one-line list of names, with an optional starting position such as `3:`.
+- Supports short batches and pasted lists longer than the available grid capacity.
+- Processes names that fit the current fully visible cards and reports any extras skipped for that batch.
+- Replaces the complete title, reads back the new value, saves, and returns to the list.
+- Supports consecutive batches in a single terminal session, with manual scrolling between screens.
+- Uses layout checks and shift-tolerant image comparison for reliable card selection.
 
-Core capabilities include:
+The workflow was used to organize a **176-item collection** on macOS.
 
-- Item card and tag detection
-- Modal window and editing control recognition
-- Dynamic UI element positioning
-- Screenshot-based navigation
-- Scroll position adjustment and recovery
-- Visual confirmation of completed actions
-
-### 4. Validation and Error Handling
-
-The project incorporates checks throughout the editing process.
-
-- Original-title verification before modification
-- Post-edit title verification
-- Dynamic re-detection of selected tags after each removal
-- Save-state and interface-transition checks
-- Diagnostic screenshots and structured operation logs
-- Safe termination when interface elements cannot be reliably identified
-
-These checks connect each edit to the intended item and make failures easier to diagnose.
+See [Visible-order usage](docs/VISIBLE_ORDER.md).
 
 ## Technology Stack
 
-| Technology | Application |
+| Technology | Purpose |
 | --- | --- |
-| Python | Workflow orchestration and automation logic |
-| OpenCV | Image processing and UI element detection |
-| NumPy | Image array operations and comparisons |
-| PyAutoGUI | Screenshot capture, mouse, keyboard, and scrolling automation |
+| Python | Workflow orchestration and command-line interface |
+| OpenCV and NumPy | Card detection, grid geometry, and image comparison |
+| PyAutoGUI and `cliclick` | Screenshot capture and macOS GUI control |
 | Pillow | Image handling |
-| cliclick | macOS mouse interaction |
-| AppleScript / macOS utilities | Application interaction and supporting operations |
-| JSON | Naming rules and configuration |
-| Python unittest | Automated tests |
+| AppleScript / macOS utilities | Desktop interactions |
+| JSON | Naming rules, configuration, and operation logs |
+| `unittest` | Automated regression testing |
 
-## Project Architecture
-
-The project organizes reusable GUI automation components and task-specific workflows under a unified command-line interface.
+## Project Structure
 
 ```text
 doumao-automation/
 ├── doumao/
-│   ├── __main__.py
-│   ├── title_rules.py
-│   ├── rules/
-│   │   └── drinks.json
+│   ├── __main__.py                # CLI entry point
+│   ├── title_rules.py             # Title transformations
+│   ├── rules/                     # Rule configurations
 │   ├── core/
-│   │   ├── tag_scanner.py
-│   │   ├── navigation.py
-│   │   ├── card_picker.py
-│   │   ├── metadata_editor.py
-│   │   ├── batch_cleaner.py
-│   │   └── scrolling.py
+│   │   ├── grid_detector.py       # Card-grid detection
+│   │   ├── visible_order_state.py  # Batch parsing and layout checks
+│   │   └── ...                    # Shared GUI components
 │   └── workflows/
 │       ├── clean_metadata.py
-│       └── normalize_titles.py
+│       ├── normalize_titles.py
+│       ├── search_queue_rename.py
+│       └── visible_order_rename.py
 ├── tests/
 ├── docs/
+│   ├── SEARCH_QUEUE.md
+│   ├── VISIBLE_ORDER.md
+│   ├── DEVELOPMENT.md
+│   └── VERSIONS.md
+├── examples/
 ├── requirements.txt
 ├── pyproject.toml
+├── run.command
 └── README.md
 ```
 
-**Core modules** handle visual recognition, navigation, interaction, and scrolling.
-
-**Workflow modules** coordinate metadata cleanup and title standardization.
-
-**Rule modules** define naming transformations independently of the automation interface.
-
-This separation enables new naming rules and collection-specific workflows to reuse existing GUI operations.
+Each workflow has its own item-selection strategy and uses shared components for visual recognition, navigation, editing, and saving.
 
 ## Getting Started
 
 ### Requirements
 
 - macOS
-- Python 3.11 or a compatible version
+- Python 3.10+
 - The target desktop library application
-- Screen Recording and Accessibility permissions for the terminal application
+- Accessibility and Screen Recording permissions
+- Homebrew and `cliclick`
 
-Install the required dependencies:
+Install the dependencies from the project directory:
 
 ```bash
+brew install cliclick
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Install `cliclick` using Homebrew:
-
-```bash
-brew install cliclick
-```
-
-### Environment Check
-
-From the project root directory:
+Check the environment and run the tests:
 
 ```bash
 python -m doumao doctor
+python -m unittest discover -s tests -q
 ```
 
-Run the automated tests:
+### Visible-Order Renaming
+
+Open the target collection in the desktop application and position the list so the cards to rename are fully visible.
 
 ```bash
-python -m unittest discover -s tests -v
+python -m doumao visible-order
 ```
 
-### Preview Item Detection
+Enter the new titles on one line:
 
-Open the target collection in the desktop application and close any editing windows.
+```text
+3: Sample_A Sample_B "Sample C" Sample_D
+```
+
+The example starts at the third visible card. Without a position prefix, the batch starts at the first card. Quotation marks group titles containing spaces.
+
+After submitting a batch, switch to the desktop application during the five-second countdown. The program renames the selected visible cards and then prompts for the next batch. Scroll to the next screen manually when needed.
+
+If the input contains more names than the visible positions can accommodate, the program processes the fitting names and reports the remaining count. Paste the remaining names in a later batch. Enter `退出` to finish.
+
+For a read-only card-position preview:
+
+```bash
+python -m doumao visible-order --preview
+```
+
+### Other Workflows
+
+Preview card detection:
 
 ```bash
 python -m doumao preview
 ```
 
-This command generates a visual preview of detected item cards.
-
-### Preview Title Standardization
+Preview rule-based title standardization:
 
 ```bash
 python -m doumao titles --limit 1
 ```
 
-The title workflow reads and evaluates the original title without saving changes.
-
-### Run an Automation Workflow
-
-The following commands use the current collection configuration. Back up the collection and open the intended list before making changes.
-
-**Metadata cleanup:**
+Run metadata cleanup or rule-based title standardization with the configured sample collection:
 
 ```bash
 python -m doumao clean --auto-save --confirm-folder drinks --limit 1
-```
-
-**Title standardization:**
-
-```bash
 python -m doumao titles --auto-save --confirm-folder drinks --limit 1
 ```
 
-The `--limit` parameter controls the number of items processed in a run. The `--confirm-folder` parameter records the user's confirmation of the selected collection. Moving the mouse to the upper-left corner triggers PyAutoGUI's emergency stop.
+Run search-result queue renaming after applying a matching search filter in the application:
 
-## Development and Iteration
+```bash
+python -m doumao search-queue --mode remove-prefix --search 'DRAFT-' --prefix 'DRAFT-' --limit 1 --auto-save --confirm-selection
+```
 
-The project evolved through iterative testing in the actual macOS application.
+See the workflow documentation for additional options and usage examples.
 
-Key development improvements included:
+## Validation and Development
 
-- Transitioning from fixed coordinates to visual UI element detection after encountering limited accessibility controls.
-- Re-detecting tag removal buttons after each interaction because the remaining tags shift position.
-- Handling retained scroll positions between editing sessions so title and notes fields can be found again.
-- Introducing screenshot-based diagnostics, title readback, and safe-stop behavior for uncertain interface states.
-- Refining scroll intervals and item selection when cards are partially visible at the screen edge.
-- Separating title-reading and naming logic from metadata editing so the two workflows can be run independently.
-- Improving collection traversal and investigating repeated item checks across scrolling positions.
-- Refactoring experimental scripts into reusable modules, with independent workflow and rule components.
+The project includes **132 automated tests** covering title rules, input parsing, grid detection, workflow transitions, and error handling. Development has combined automated regression testing with macOS GUI testing across metadata cleanup, title standardization, search-result queues, and visible-order renaming.
 
-The metadata-cleanup and title-standardization workflows were validated through macOS use. The refactored project has passed nine automated tests and a read-only interface preview.
+Key improvements include dynamic control detection, title readback before saving, queue-transition verification, flexible batch sizes, and shift-tolerant card comparison.
 
-Additional technical decisions and version history are documented in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) and [`docs/VERSIONS.md`](docs/VERSIONS.md).
+The next development stage focuses on **code-structure review and targeted refactoring**: consolidating reusable GUI operations, simplifying workflow dependencies, and maintaining the tested interaction behavior.
 
-## Future Development
-
-The next development priorities are:
-
-- Improve item deduplication across scrolling positions.
-- Optimize collection traversal and scrolling efficiency.
-- Expand configurable naming and metadata rules.
-- Support additional collections through reusable workflows.
-- Extend automated and end-to-end GUI regression testing.
-
-## Development Collaboration
-
-The project owner defined the requirements and editing rules, identified interface issues, performed macOS testing, and guided design decisions based on the results. AI assisted with Python implementation, computer vision techniques, debugging, and code refactoring.
+Additional background: [Development notes](docs/DEVELOPMENT.md) · [Version notes](docs/VERSIONS.md).
