@@ -12,6 +12,7 @@ from pathlib import Path
 from functools import partial
 
 from ..core.grid_detector import GridDetectionError, detect_visible_grid
+from ..core.partial_grid_detector import detect_partial_grid
 from ..core.title_edit_contract import EditOutcome, EditResult, SaveStage
 from ..core.title_editor import edit_selected_card, TitleEditFailure, TitleEditInterrupted, resolve_click_command
 from ..core.visible_order_state import (
@@ -61,13 +62,15 @@ def capture(ui):
         ui.check_list(frame)
         try:
             raw_cards = detect_visible_grid(frame)
-        except GridDetectionError:
-            # Keep the previously supported incomplete final row. The legacy
-            # detector is limited by theme and can only serve as a conservative
-            # fallback for <12 observed cards; it must pass row/column checks.
-            raw_cards = ui.card_rows(frame)
-            if not 1 <= len(raw_cards) < 12:
-                raise
+        except GridDetectionError as structural_error:
+            # Keep the existing 4x3 path; independently prove smaller grids.
+            try:
+                raw_cards = detect_partial_grid(frame)
+            except GridDetectionError:
+                # Retain the previously supported incomplete-row fallback.
+                raw_cards = ui.card_rows(frame)
+                if not 1 <= len(raw_cards) < 12:
+                    raise structural_error
         detected = len(raw_cards)
         cards = ordered_cards(raw_cards, frame.shape[1])
     except Exception as exc:

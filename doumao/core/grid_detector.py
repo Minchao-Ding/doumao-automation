@@ -96,6 +96,43 @@ def _choose_grid(lines: list[dict], count: int, *, minimum_step: int,
     return (selected, best) if selected is not None else None
 
 
+def _row_pitch_valid(xs, ys) -> bool:
+    """Reject false 4x3 grids formed by subdividing the inside of 4x2 art.
+
+    Real card row height is broadly comparable to card column width. This
+    constrains geometry; it never relaxes edit or image identity checks.
+    """
+    dx = float(np.median(np.diff(xs)))
+    dy = float(np.median(np.diff(ys)))
+    return dx > 0 and .85 <= dy / dx <= 1.50
+
+
+def _vertical_edges_span_grid(candidates, xs, ys) -> bool:
+    """Require the three internal column borders to span the claimed 3 rows.
+
+    A two-row screen can contain horizontal UI/artwork lines that form a
+    superficially plausible 4x3 grid.  Its inner card columns only start at
+    the *actual* gallery, substantially below the false first row.  The
+    existing full-grid detector must not accept that false first row.
+
+    Do not require the outermost borders: the application's panel/sidebar
+    can extend outside the gallery and is not proof of the artwork grid.
+    """
+    if len(xs) != 5 or len(ys) != 4:
+        return False
+    pitch = float(np.median(np.diff(ys)))
+    if pitch <= 0:
+        return False
+    slack = max(12, min(40, round(pitch * .08)))
+    for x in xs[1:-1]:
+        aligned = [edge for edge in candidates
+                   if abs(edge['coordinate'] - x) <= 3]
+        if not any(edge['start'] <= ys[0] + slack and
+                   edge['end'] >= ys[-1] - slack for edge in aligned):
+            return False
+    return True
+
+
 def _activity(frame: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> float:
     sample = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
     if sample.size == 0:
@@ -139,6 +176,10 @@ def detect_visible_grid(frame: np.ndarray, *, diagnostics: dict | None = None) -
     if yres is None:
         raise GridDetectionError('无法确定三行卡片的四条等距水平边界；请确认底行卡片标题完整可见')
     ys, _ = yres
+    if not _row_pitch_valid(xs, ys):
+        raise GridDetectionError('三行卡片行高与列宽不匹配，疑似误识别图纸内部边线')
+    if not _vertical_edges_span_grid(vs, xs, ys):
+        raise GridDetectionError('三行网格内部列边界未贯穿全部卡片，疑似顶部界面误识别')
     if diagnostics is not None:
         diagnostics.update(selected_columns=xs, selected_rows=ys)
     # Bounds must cover significant panel area, without spanning unrelated UI.
