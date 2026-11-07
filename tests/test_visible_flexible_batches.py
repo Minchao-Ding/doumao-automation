@@ -9,6 +9,7 @@ import numpy as np
 
 from doumao.core.visible_order_state import VisibleOrderUncertain, ensure_stable, parse_line
 from doumao.workflows import visible_order_rename as wf
+from doumao.core.title_edit_contract import EditResult, EditOutcome, SaveStage
 
 
 def grid():
@@ -37,21 +38,22 @@ class UI:
     def check_list(self, frame):
         return None
 
-    def handle_card(self, target, frame, position, do_save, rule):
+    def edit_card(self, target, frame, position, do_save, rule):
         if not do_save:
             self.modal_opened_again = True
             raise AssertionError('保存后不得二次打开图纸')
         self.handled.append((position, target['click'], rule['new']))
         if self.on_save:
             self.on_save(position)
-        return 'saved', 'existing', rule['new']
+        return EditResult(EditOutcome.RETURNED_TO_LIST, SaveStage.LIST_RETURN_CONFIRMED,
+                          original_title='existing', proposed_title=rule['new'])
 
 
 def run(ui, names):
     with patch.object(wf,'detect_visible_grid',side_effect=lambda _:ui.cards), \
          patch.object(wf,'emit'), \
          patch.object(wf.time,'sleep',return_value=None):
-        return wf.process_batch(ui, parse_line(names))
+        return wf.process_batch(ui, parse_line(names), editor=ui.edit_card)
 
 
 class FlexibleBatchTests(unittest.TestCase):
@@ -82,7 +84,7 @@ class FlexibleBatchTests(unittest.TestCase):
              patch.object(wf,'emit',side_effect=lambda event,**kwargs:captured.append((event,kwargs))), \
              patch.object(wf.time,'sleep',return_value=None):
             with self.assertRaisesRegex(VisibleOrderUncertain,'超过三行完整卡片'):
-                wf.process_batch(ui,parse_line('3: 甲 乙 丙 丁'))
+                wf.process_batch(ui,parse_line('3: 甲 乙 丙 丁'), editor=ui.edit_card)
         stop = next(data for event,data in captured if event=='batch_stopped')
         self.assertEqual(stop['completed'],[3,4,5])
         self.assertIsNone(stop['pending'])
@@ -105,7 +107,7 @@ class FlexibleBatchTests(unittest.TestCase):
             return [dict(c,click=(c['click'][0]+34,c['click'][1]+30)) for c in original]
         with patch.object(wf,'detect_visible_grid',side_effect=detect), \
              patch.object(wf,'emit'),patch.object(wf.time,'sleep',return_value=None):
-            result=wf.process_batch(ui,parse_line('3: 新标题'))
+            result=wf.process_batch(ui,parse_line('3: 新标题'), editor=ui.edit_card)
         self.assertEqual(result.completed,[3])
         self.assertEqual(ui.handled[0][1],(original[2]['click'][0]+34, original[2]['click'][1]+30))
 
@@ -121,7 +123,7 @@ class FlexibleBatchTests(unittest.TestCase):
         with patch.object(wf,'detect_visible_grid',side_effect=detect), \
              patch.object(wf,'emit'),patch.object(wf.time,'sleep',return_value=None):
             with self.assertRaisesRegex(VisibleOrderUncertain,'点击位置大幅改变'):
-                wf.process_batch(ui,parse_line('3: 甲'))
+                wf.process_batch(ui,parse_line('3: 甲'), editor=ui.edit_card)
         self.assertEqual(ui.handled,[])
 
     def test_large_vertical_drift_stops(self):

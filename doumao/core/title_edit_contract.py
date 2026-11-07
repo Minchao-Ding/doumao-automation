@@ -1,8 +1,4 @@
-"""Phase 0: pure contracts for future title-edit adapters.
-
-No production workflow imports or invokes this module in Phase 0.  This
-module does not access the macOS GUI, images, logs, filesystem or network.
-"""
+"""Pure title-edit result and save-attempt contracts (no GUI side effects)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -47,6 +43,7 @@ class TitleEditPort(Protocol):
     def verify_save_ready(self) -> None: ...
     def click_save(self) -> None: ...
     def verify_list_return(self) -> None: ...
+    def close_without_save(self) -> None: ...
 
 
 class SingleSaveGuard:

@@ -8,6 +8,7 @@ from doumao.core.visible_order_state import (
     parse_line, verify_mapping,
 )
 from doumao.workflows import visible_order_rename as wf
+from doumao.core.title_edit_contract import EditResult, EditOutcome, SaveStage
 
 
 def card(col, top, token):
@@ -86,13 +87,18 @@ class FakeUI:
         pass
     def card_rows(self,frame):
         return self.cards
-    def handle_card(self,target,frame,pos,save,rule):
+    def edit_card(self,target,frame,pos,save,rule):
         self.handled.append((pos,save,rule['new']))
         if self.fail and save:
             raise RuntimeError('uncertain saving')
         if save:
-            return ('skipped' if self.skip else 'saved','old','new') if self.skip else ('saved','old',rule['new'])
-        return 'skipped',rule['new'],rule['new']
+            return (EditResult(EditOutcome.SKIPPED, SaveStage.NOT_ATTEMPTED,
+                           original_title=rule['new'], proposed_title=rule['new'])
+                if self.skip else EditResult(EditOutcome.RETURNED_TO_LIST,
+                    SaveStage.LIST_RETURN_CONFIRMED, original_title='old',
+                    proposed_title=rule['new']))
+        return EditResult(EditOutcome.SKIPPED, SaveStage.NOT_ATTEMPTED,
+                          original_title=rule['new'], proposed_title=rule['new'])
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -102,7 +108,7 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(wf,'emit',side_effect=lambda event,**data:self.events.append((event,data))),\
              patch.object(wf.time,'sleep',return_value=None),\
              patch.object(wf,'detect_visible_grid',side_effect=lambda frame:ui.cards):
-            return wf.process_batch(ui,parse_line(line))
+            return wf.process_batch(ui,parse_line(line),editor=ui.edit_card)
     def test_same_names_both_positions(self):
         ui=FakeUI(self.cards)
         state=self.run_batch(ui,'Same Same')
@@ -114,21 +120,23 @@ class WorkflowTests(unittest.TestCase):
             ui.handled.append((pos,save,rule['new']))
             if not save:
                 raise AssertionError('保存后不应重新打开同一张图纸')
-            return ('saved','old',rule['new'])
-        ui.handle_card=refuse_reopen
+            return EditResult(EditOutcome.RETURNED_TO_LIST,
+                              SaveStage.LIST_RETURN_CONFIRMED,
+                              original_title='old', proposed_title=rule['new'])
+        ui.edit_card=refuse_reopen
         state=self.run_batch(ui,'A B')
         self.assertEqual(state.completed,[1,2])
         self.assertEqual(ui.handled,[(1,True,'A'),(2,True,'B')])
 
     def test_saved_layout_shift_stops_next_position(self):
         ui=FakeUI(self.cards)
-        original=ui.handle_card
+        original=ui.edit_card
         def shifted(target,frame,pos,save,rule):
             result=original(target,frame,pos,save,rule)
             if save:
                 ui.cards[0]=dict(ui.cards[0],top=ui.cards[0]['top']+30)
             return result
-        ui.handle_card=shifted
+        ui.edit_card=shifted
         with self.assertRaises(VisibleOrderUncertain):self.run_batch(ui,'A B')
         self.assertEqual(ui.handled,[(1,True,'A')])
 
@@ -152,17 +160,17 @@ class WorkflowTests(unittest.TestCase):
         def enter(prompt):
             called.append(prompt)
             return '退出'
-        with patch.object(wf,'frontend',return_value=ui), patch.object(wf,'configure'):
-            wf.run(input_func=enter,sleep=lambda seconds:None)
+        with patch.object(wf,'frontend',return_value=ui), patch.object(wf,'resolve_click_command',return_value='/fake/cliclick'):
+            wf.run(input_func=enter,sleep=lambda seconds:None, editor=ui.edit_card)
         self.assertEqual(len(called),1)
         self.assertEqual(ui.handled,[])
     def test_preview_only_never_opens_editor(self):
         ui=FakeUI(self.cards)
         inputs=iter(['A B','退出'])
         with patch.object(wf,'frontend',return_value=ui), \
-             patch.object(wf,'configure'), patch.object(wf,'emit'), \
+             patch.object(wf,'resolve_click_command',return_value='/fake/cliclick'), patch.object(wf,'emit'), \
              patch.object(wf,'preview_batch') as preview:
-            wf.run(input_func=lambda prompt:next(inputs),sleep=lambda seconds:None,preview_only=True)
+            wf.run(input_func=lambda prompt:next(inputs),sleep=lambda seconds:None,preview_only=True, editor=ui.edit_card)
         self.assertEqual(ui.handled,[])
         self.assertEqual(preview.call_count,1)
 
@@ -170,9 +178,9 @@ class WorkflowTests(unittest.TestCase):
         ui=FakeUI(self.cards)
         inputs=iter(['A B','3: C D','退出'])
         with patch.object(wf,'frontend',return_value=ui),\
-             patch.object(wf,'configure'),patch.object(wf,'emit'),patch.object(wf.time,'sleep'),\
+             patch.object(wf,'resolve_click_command',return_value='/fake/cliclick'),patch.object(wf,'emit'),patch.object(wf.time,'sleep'),\
              patch.object(wf,'detect_visible_grid',side_effect=lambda frame:ui.cards):
-            wf.run(input_func=lambda prompt:next(inputs),sleep=lambda seconds:None)
+            wf.run(input_func=lambda prompt:next(inputs),sleep=lambda seconds:None, editor=ui.edit_card)
         self.assertEqual([x[0] for x in ui.handled if x[1]],[1,2,3,4])
 
 if __name__ == '__main__': unittest.main()

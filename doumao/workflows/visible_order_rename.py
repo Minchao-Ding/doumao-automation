@@ -1,17 +1,19 @@
 """Interactive visible-grid renamer: no search, no scrolling, no artwork inference.
 
-GUI operations intentionally delegate to the existing validated title editor.
+Title editing delegates directly to the shared core transaction.
 A successful save returns to the list without reopening the card.
 """
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+from functools import partial
 
 from ..core.grid_detector import GridDetectionError, detect_visible_grid
+from ..core.title_edit_contract import EditOutcome, EditResult, SaveStage
+from ..core.title_editor import edit_selected_card, TitleEditFailure, TitleEditInterrupted, resolve_click_command
 from ..core.visible_order_state import (
     BatchState, VisibleOrderUncertain, ensure_stable,
     ordered_cards, parse_line, verify_mapping, fit_visible_assignments,
@@ -30,7 +32,7 @@ def emit(event, **fields):
 
 
 def frontend():
-    from . import normalize_titles as ui
+    from ..core import list_view as ui
     return ui
 
 
@@ -89,18 +91,16 @@ def check_snapshot(ui, reference, *, fingerprint_positions=None):
     return frame, cards
 
 
-def configure(ui):
-    cli = shutil.which('cliclick') or next(
-        (x for x in ('/opt/homebrew/bin/cliclick','/usr/local/bin/cliclick') if Path(x).exists()), None)
-    if not cli:
-        raise RuntimeError('未发现 cliclick，请先运行 doctor 检查本地环境')
-    ui.cleaner.CLICK = cli
-    ui.LOG = LOG
-    ui.DIAGNOSTIC = DIAGNOSTIC
+def process_batch(ui, assignments, *, sleep=time.sleep, trim_to_visible=False,
+                  click_command=None, editor=None):
+    """Process a frozen list with a shared editor, or an injected test editor.
 
-
-def process_batch(ui, assignments, *, sleep=time.sleep, trim_to_visible=False):
-    """One frozen visible snapshot. Stop on any uncertain save or list movement."""
+    The injected callable is a testing seam, not a second production editor:
+    production always dispatches through edit_selected_card. The caller owns
+    position identity, not the title editor's internal GUI navigation.
+    """
+    do_edit = editor if editor is not None else partial(
+        edit_selected_card, click_command=click_command, emit=emit)
     frame, baseline = capture(ui)
     if trim_to_visible:
         assignments, dropped = fit_visible_assignments(assignments, len(baseline))
@@ -115,6 +115,7 @@ def process_batch(ui, assignments, *, sleep=time.sleep, trim_to_visible=False):
          visible=len(baseline))
     for assignment in assignments:
         pos, title = assignment.position, assignment.title
+        edit_result = None
         try:
             # Re-detect and validate before each click. Use the CURRENT card
             # center, rather than a stale point from the first screenshot.
@@ -125,28 +126,48 @@ def process_batch(ui, assignments, *, sleep=time.sleep, trim_to_visible=False):
             emit('position_started', position=pos, new=title)
             # Exact replacement is a rule, not a derived title or search query.
             rule = {'rule_type':'replace_entire_title', 'new':title, 'max_length':64}
-            status, old, proposed = ui.handle_card(target, frame, pos, True, rule)
-            if status not in ('saved','skipped'):
-                raise VisibleOrderUncertain(f'第 {pos} 张未返回明确的操作结果：{status}')
-            if status == 'skipped' and old != title:
+            edit_result = do_edit(target, frame, pos, True, rule)
+            if not isinstance(edit_result, EditResult):
+                raise VisibleOrderUncertain(f'第 {pos} 张没有返回结构化编辑结果')
+            status = edit_result.outcome
+            old = edit_result.original_title
+            if status not in (EditOutcome.RETURNED_TO_LIST, EditOutcome.SKIPPED):
+                raise VisibleOrderUncertain(f'第 {pos} 张未返回明确的操作结果：{status.value}')
+            if status is EditOutcome.SKIPPED and old != title:
                 raise VisibleOrderUncertain('原名称不等于目标名称，但编辑器跳过了保存')
-            # ui.handle_card already rereads the editor title BEFORE Save,
-            # then waits for the edit modal to close and verifies the list.
-            # Do not reopen the same card: the next item starts with another
-            # complete layout/assigned-artwork check, without a GUI click.
+            if edit_result.proposed_title != title:
+                raise VisibleOrderUncertain('编辑器返回的目标名称与本批指定名称不一致')
+            # The shared editor verifies readback before Save and then the
+            # return to list. This workflow still verifies slot identity
+            # BEFORE the next click; it must not reopen the saved card.
             state.verified(pos)
-            emit('position_verified', position=pos, old=old, new=title, status=status,
+            emit('position_verified', position=pos, old=old, new=title,
+                 status=status.value, save_stage=edit_result.save_stage.value,
                  verification='editor_readback_and_list_return')
-            print(f'  第 {pos} 张：{"原标题已相同，未保存" if status == "skipped" else "已保存并返回列表"} ({len(state.completed)}/{len(assignments)})',flush=True)
-        except Exception as exc:
+            print(f'  第 {pos} 张：{"原标题已相同，未保存" if status is EditOutcome.SKIPPED else "已保存并返回列表"} ({len(state.completed)}/{len(assignments)})',flush=True)
+        except BaseException as exc:
             state.status = 'stopped'
-            emit('batch_stopped', reason=repr(exc), completed=state.completed,
-                 pending=state.pending,
-                 remaining=[{'position':a.position,'new':a.title} for a in state.remaining])
+            if isinstance(exc, (TitleEditFailure, TitleEditInterrupted)):
+                save_stage = exc.result.save_stage
+            elif edit_result is not None:
+                save_stage = edit_result.save_stage
+            else:
+                save_stage = SaveStage.NOT_ATTEMPTED
             try:
-                ui.diagnostics(str(exc))
+                emit('batch_stopped', reason=repr(exc), completed=state.completed,
+                     pending=state.pending, save_stage=save_stage.value,
+                     remaining=[{'position':a.position,'new':a.title} for a in state.remaining])
+                emit('stopped', reason=str(exc))
+            except Exception:
+                pass  # Logging failure must not hide a GUI safety exception.
+            # Diagnostics must not hide the original exception or trigger retry.
+            try:
+                from ..core import list_view
+                list_view.save_title_diagnostic(DIAGNOSTIC)
             except Exception:
                 pass
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             raise VisibleOrderUncertain(
                 f'批次停止；已核验位置 {state.completed}；待核对位置 {state.pending}；'
                 f'未完成位置 {[a.position for a in state.remaining]}。原因：{exc}') from exc
@@ -182,9 +203,10 @@ def preview_batch(ui, assignments, *, trim_to_visible=False):
     return assignments
 
 
-def run(*, input_func=input, sleep=time.sleep, preview_only=False):
+def run(*, input_func=input, sleep=time.sleep, preview_only=False,
+        editor=None):
     ui = frontend()
-    configure(ui)
+    click_command = resolve_click_command()
     print('可视区域顺序重命名：每批仅处理当前完整可见的卡片，不搜索、不自动滚动。')
     print('输入：每批可粘贴超过12个名称；仅处理当前可见位置，多出的忽略、不顺延。可用 3: 指定起点。')
     print('输入「退出」结束。每次提交有效名字后有5秒切回豆猫。', flush=True)
@@ -214,14 +236,15 @@ def run(*, input_func=input, sleep=time.sleep, preview_only=False):
         sleep(5)
         batch_number += 1
         try:
-            result = None if preview_only else process_batch(ui, assignments, sleep=sleep, trim_to_visible=True)
+            result = None if preview_only else process_batch(ui, assignments, sleep=sleep, trim_to_visible=True,
+                                                                  click_command=click_command, editor=editor)
             if preview_only:
                 result = preview_batch(ui, assignments, trim_to_visible=True)
         except ValueError as exc:
             # Input exceeds actually visible cards: no editor opened.
             print(f'本批未开始：{exc}；请重新输入。', flush=True)
             continue
-        except Exception as exc:
+        except BaseException as exc:
             emit('session_stopped', batch=batch_number, reason=str(exc))
             print(f'安全停止：{exc}\n请人工检查最后一个待核对位置，不会自动重试。')
             raise

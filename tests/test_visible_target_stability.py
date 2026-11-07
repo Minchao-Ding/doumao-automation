@@ -8,6 +8,7 @@ import numpy as np
 
 from doumao.core.visible_order_state import VisibleOrderUncertain, ensure_stable, parse_line
 from doumao.workflows import visible_order_rename as workflow
+from doumao.core.title_edit_contract import EditResult, EditOutcome, SaveStage
 
 
 def card(slot):
@@ -32,11 +33,13 @@ class _UI:
     def check_list(self, frame):
         pass
 
-    def handle_card(self, target, frame, pos, do_save, rule):
+    def edit_card(self, target, frame, pos, do_save, rule):
         self.handled.append((pos, do_save))
         if do_save:
-            return 'saved', 'previous', rule['new']
-        return 'skipped', rule['new'], rule['new']
+            return EditResult(EditOutcome.RETURNED_TO_LIST, SaveStage.LIST_RETURN_CONFIRMED,
+                              original_title='previous', proposed_title=rule['new'])
+        return EditResult(EditOutcome.SKIPPED, SaveStage.NOT_ATTEMPTED,
+                          original_title=rule['new'], proposed_title=rule['new'])
 
 
 class TargetStabilityTests(unittest.TestCase):
@@ -79,7 +82,7 @@ class TargetStabilityTests(unittest.TestCase):
             return self.original if first['count'] == 1 else self.with_unrelated_change
         with patch.object(workflow, 'detect_visible_grid', side_effect=detect), \
              patch.object(workflow, 'emit'), patch.object(workflow.time, 'sleep', return_value=None):
-            state = workflow.process_batch(ui, parse_line('3: C D'))
+            state = workflow.process_batch(ui, parse_line('3: C D'), editor=ui.edit_card)
         self.assertEqual(state.completed, [3,4])
         self.assertEqual(ui.handled, [(3, True), (4, True)])
 
@@ -94,7 +97,7 @@ class TargetStabilityTests(unittest.TestCase):
         with patch.object(workflow, 'detect_visible_grid', side_effect=detect), \
              patch.object(workflow, 'emit'), patch.object(workflow.time, 'sleep', return_value=None):
             with self.assertRaisesRegex(VisibleOrderUncertain, '第 3 张图像'):
-                workflow.process_batch(ui, parse_line('3: C D'))
+                workflow.process_batch(ui, parse_line('3: C D'), editor=ui.edit_card)
         self.assertEqual(ui.handled, [])
 
     def test_preview_matches_real_preflight_target_selection(self):

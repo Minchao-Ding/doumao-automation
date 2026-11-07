@@ -13,6 +13,7 @@ from doumao.core.visible_order_state import (
     ensure_stable, parse_line,
 )
 from doumao.workflows import visible_order_rename as workflow
+from doumao.core.title_edit_contract import EditResult, EditOutcome, SaveStage
 
 
 def sample_art(seed):
@@ -83,9 +84,10 @@ class ArtworkToleranceTests(unittest.TestCase):
         class UI:
             def shot(self): return np.zeros((1250, 1600, 3),np.uint8)
             def check_list(self,frame): return None
-            def handle_card(self,target,frame,pos,save,rule):
+            def edit_card(self,target,frame,pos,save,rule):
                 seen.append((pos,rule['new']))
-                return 'saved', 'old',rule['new']
+                return EditResult(EditOutcome.RETURNED_TO_LIST, SaveStage.LIST_RETURN_CONFIRMED,
+                                  original_title='old', proposed_title=rule['new'])
             diagnostics=Mock()
         counter={'n':0}
         def detector(frame):
@@ -94,7 +96,7 @@ class ArtworkToleranceTests(unittest.TestCase):
         with patch.object(workflow,'detect_visible_grid',side_effect=detector), \
              patch.object(workflow,'emit'), \
              patch.object(workflow.time,'sleep',return_value=None):
-            result=workflow.process_batch(UI(),parse_line('2: 甲 乙'))
+            result=workflow.process_batch(UI(),parse_line('2: 甲 乙'),editor=UI().edit_card)
         self.assertEqual(result.completed,[2,3])
         self.assertEqual(seen,[(2,'甲'),(3,'乙')])
 

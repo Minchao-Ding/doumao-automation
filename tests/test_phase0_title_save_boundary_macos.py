@@ -1,91 +1,115 @@
-"""Low-level Save-click regression for actual v3.5 title editor.
+"""Workflow-level regression for titles after extracting the GUI editor.
 
-The module imports the legacy macOS GUI stack; run on the user's Mac.
-All IO functions are mocked: tests never operate Doumao or click the screen.
+No real Doumao GUI, screenshot, clipboard, or input event is used.
 """
 from __future__ import annotations
 
 import sys
 import unittest
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
-@unittest.skipUnless(sys.platform == "darwin", "legacy PyAutoGUI imports need macOS")
-class ExistingTitleSaveBoundaryTests(unittest.TestCase):
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS GUI imports need macOS')
+class NormalizeWorkflowTests(unittest.TestCase):
     def setUp(self):
         import numpy as np
-        from doumao.workflows import normalize_titles as ui
-        self.ui = ui
+        from doumao.workflows import normalize_titles as normal
+        from doumao.core.title_edit_contract import EditOutcome, EditResult, SaveStage
+        from doumao.core.title_editor import TitleEditFailure, TitleEditInterrupted
+
+        self.normal = normal
+        self.EditOutcome = EditOutcome
+        self.EditResult = EditResult
+        self.SaveStage = SaveStage
+        self.TitleEditFailure = TitleEditFailure
+        self.TitleEditInterrupted = TitleEditInterrupted
         self.frame = np.zeros((1200, 1900, 3), dtype=np.uint8)
-        self.title_rect = (50, 40, 170, 40)
-        self.save_rect = (40, 300, 120, 40)
-        self.target = {"click": (100, 300)}
-        self.patches = ExitStack()
-        self.addCleanup(self.patches.close)
+        self.card = {'col': 0, 'top': 200, 'click': (140, 210),
+                     'fp': np.full((70, 60, 3), 120, dtype=np.uint8)}
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
 
-        def mock_attr(target, name, **opts):
-            return self.patches.enter_context(patch.object(target, name, **opts))
+        def stub(obj, name, **opts):
+            return self.stack.enter_context(patch.object(obj, name, **opts))
 
-        mock_attr(ui.scanner, "assert_app")
-        mock_attr(ui.proven.v08, "screen_click")
-        mock_attr(ui.proven.v08, "wait_for_detail", return_value=(self.frame, (20, 20, 200, 200)))
-        mock_attr(ui.nav, "find_pencil", return_value=((100, 100), (0, 0, 20, 20)))
-        mock_attr(ui, "wait_for_title_editor", return_value=(self.frame, self.save_rect, self.title_rect))
-        self.read_title = mock_attr(ui, "read_title_only", side_effect=["Old", "Old", "New"])
-        mock_attr(ui, "proposal", return_value="New")
-        mock_attr(ui, "shot", return_value=self.frame)
-        mock_attr(ui, "find_title_only", return_value=self.title_rect)
-        mock_attr(ui.cleaner, "find_save", return_value=self.save_rect)
-        self.click = mock_attr(ui.cleaner, "click_img")
-        mock_attr(ui.cleaner, "shell")
-        mock_attr(ui.cleaner, "press")
-        mock_attr(ui.time, "sleep")
-        mock_attr(ui, "emit")
-        mock_attr(ui.proven, "wait_for_list_after_save", return_value=self.frame)
-        mock_attr(ui, "check_list")
-        mock_attr(ui, "go_back_to_list", return_value=self.frame)
+        self.stub = stub
+        stub(normal, 'load_rule', return_value={'folder': 'sample'})
+        stub(normal.list_view, 'shot', return_value=self.frame)
+        stub(normal.list_view, 'check_list')
+        stub(normal.list_view, 'card_rows', return_value=[self.card])
+        stub(normal, 'title_gap_candidate', return_value=(False, 0, 0))
+        stub(normal, 'preview')
+        stub(normal.time, 'sleep')
+        stub(normal.pyautogui, 'size', return_value=(1900, 1200))
+        self.resolve = stub(normal, 'resolve_click_command', return_value='/local/cliclick')
+        self.editor = stub(normal, 'edit_selected_card')
+        self.emit = stub(normal, 'emit')
 
-    def do_edit(self, save=True):
-        return self.ui.handle_card(self.target, self.frame, 1, save, {"rule_type": "unused"})
+    def args(self, **options):
+        data = dict(rule_config='unused', auto_save=True,
+                    limit=1, scroll=3, max_scrolls=1,
+                    current_screen_only=True, expect_visible=None,
+                    expected_changes=None, list_preview=False)
+        data.update(options)
+        return SimpleNamespace(**data)
 
-    def save_clicks(self):
-        sx, sy, sw, sh = self.save_rect
-        x, y = sx + sw * .50, sy + sh * .50
-        return [call for call in self.click.call_args_list if call.args[:2] == (x, y)]
+    def saved(self):
+        return self.EditResult(self.EditOutcome.RETURNED_TO_LIST,
+                               self.SaveStage.LIST_RETURN_CONFIRMED,
+                               original_title='Old', proposed_title='New')
 
-    def test_success_clicks_save_exactly_once(self):
-        self.assertEqual(self.do_edit(), ("saved", "Old", "New"))
-        self.assertEqual(len(self.save_clicks()), 1)
+    def test_saved_item_calls_shared_editor_once(self):
+        self.editor.return_value = self.saved()
+        self.normal.run(self.args())
+        self.editor.assert_called_once()
+        kw = self.editor.call_args.kwargs
+        self.assertEqual(kw['click_command'], '/local/cliclick')
+        self.assertTrue(kw['emit'] is self.normal.edit_event)
+        self.assertTrue(any(c.args[0] == 'session_finished' and c.kwargs['changed'] == 1
+                            for c in self.emit.call_args_list))
 
-    def test_preview_never_clicks_save(self):
-        self.assertEqual(self.do_edit(save=False), ("preview", "Old", "New"))
-        self.assertEqual(len(self.save_clicks()), 0)
+    def test_unchanged_skipped_item_not_counted_as_save(self):
+        self.editor.return_value = self.EditResult(self.EditOutcome.SKIPPED,
+                         self.SaveStage.NOT_ATTEMPTED,
+                         original_title='Same', proposed_title='Same')
+        self.normal.run(self.args())
+        self.assertTrue(any(c.args[0] == 'session_finished' and
+                            c.kwargs['skipped'] == 1 and c.kwargs['changed'] == 0
+                            for c in self.emit.call_args_list))
 
-    def test_failed_readback_never_clicks_save(self):
-        self.read_title.side_effect = ["Old", "Old", "Mismatch"]
-        with self.assertRaisesRegex(RuntimeError, "回读不一致"):
-            self.do_edit()
-        self.assertEqual(len(self.save_clicks()), 0)
+    def test_preview_never_requests_save(self):
+        self.editor.return_value = self.EditResult(self.EditOutcome.PREVIEW,
+                         self.SaveStage.NOT_ATTEMPTED,
+                         original_title='Old', proposed_title='New')
+        self.normal.run(self.args(auto_save=False))
+        self.assertFalse(self.editor.call_args.args[3])
 
-    def test_save_issued_but_list_not_confirmed_no_retry(self):
-        self.ui.proven.wait_for_list_after_save.side_effect = RuntimeError("return timeout")
-        with self.assertRaisesRegex(RuntimeError, "return timeout"):
-            self.do_edit()
-        self.assertEqual(len(self.save_clicks()), 1)
+    def test_list_preview_never_opens_editor_or_resolves_backend(self):
+        self.normal.run(self.args(list_preview=True))
+        self.editor.assert_not_called()
+        self.resolve.assert_not_called()
 
-    def test_save_click_itself_raises_no_retry(self):
-        self.click.side_effect = [None, RuntimeError("uncertain click")]
-        with self.assertRaisesRegex(RuntimeError, "uncertain click"):
-            self.do_edit()
-        self.assertEqual(len(self.save_clicks()), 1)
+    def test_unconfirmed_save_aborts_without_retry(self):
+        failure = self.TitleEditFailure(self.EditResult(
+            self.EditOutcome.SAVE_UNCERTAIN, self.SaveStage.ATTEMPTED,
+            original_title='Old', proposed_title='New', reason='return timeout'))
+        self.editor.side_effect = failure
+        with self.assertRaises(self.TitleEditFailure):
+            self.normal.run(self.args())
+        self.editor.assert_called_once()
+        self.assertFalse(any(c.args[0] == 'session_finished' for c in self.emit.call_args_list))
 
-    def test_keyboard_interrupt_after_click_does_not_repeat(self):
-        self.ui.proven.wait_for_list_after_save.side_effect = KeyboardInterrupt()
+    def test_interrupt_aborts_without_retry(self):
+        failure = self.TitleEditInterrupted(self.EditResult(
+            self.EditOutcome.SAVE_UNCERTAIN, self.SaveStage.ATTEMPTED,
+            original_title='Old', proposed_title='New', reason='Ctrl+C'))
+        self.editor.side_effect = failure
         with self.assertRaises(KeyboardInterrupt):
-            self.do_edit()
-        self.assertEqual(len(self.save_clicks()), 1)
+            self.normal.run(self.args())
+        self.editor.assert_called_once()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

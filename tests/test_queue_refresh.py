@@ -42,9 +42,9 @@ class RefreshTests(unittest.TestCase):
     def test_snapshot_stable_empty(self):
         ui=Mock()
         ui.card_rows.return_value=[]
-        ui.scroll_util.change_fraction.return_value=0
-        with patch.object(workflow,'scroll_to_top',return_value='screen'), \
-             patch.object(workflow,'_list',return_value='screen'), \
+        screen = np.zeros((900, 1500, 3), dtype=np.uint8)
+        with patch.object(workflow,'scroll_to_top',return_value=screen), \
+             patch.object(workflow,'_list',return_value=screen), \
              patch.object(workflow.time,'sleep',return_value=None):
             _, result=workflow.snapshot(ui)
         self.assertEqual(result,[])
@@ -52,8 +52,9 @@ class RefreshTests(unittest.TestCase):
     def test_snapshot_loading_change_is_not_exhaustion(self):
         ui=Mock()
         ui.card_rows.return_value=[]
-        ui.scroll_util.change_fraction.return_value=.04
-        with patch.object(workflow,'scroll_to_top',return_value='screen'), \
-             patch.object(workflow,'_list',return_value='screen'), \
+        before = np.zeros((900, 1500, 3), dtype=np.uint8)
+        loading = np.full_like(before, 255)
+        with patch.object(workflow,'scroll_to_top',return_value=before), \
+             patch.object(workflow,'_list',return_value=loading), \
              patch.object(workflow.time,'sleep',return_value=None):
             with self.assertRaises(QueueUncertain):workflow.snapshot(ui)

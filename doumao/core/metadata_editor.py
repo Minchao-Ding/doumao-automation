@@ -254,18 +254,22 @@ def cross(chip):
     return round(x+w-h*.52), round(y+h/2)
 
 
-def press(*actions):
+def press(*actions, click_command: str | None = None):
     assert_doumao()
-    shell(CLICK, '-w', '130', *actions)
+    shell(CLICK if click_command is None else click_command, '-w', '130', *actions)
 
 
-def read_field(rect, im):
-    """复制选中字段回读；清空字段时剪贴板哨兵不会被替换。"""
+def read_field(rect, im, *, click_command: str | None = None):
+    """复制选中字段回读；可显式指定 cliclick，避免编辑器依赖全局 CLICK。"""
     x, y, w, h = rect
     click_img(x+w*.30, y+h*.55, im)
     time.sleep(.2)
     shell('/usr/bin/pbcopy', input_text='__DOUMAO_CLIPBOARD_SENTINEL__')
-    press('kd:cmd','t:a','ku:cmd','kd:cmd','t:c','ku:cmd')
+    keys = ('kd:cmd','t:a','ku:cmd','kd:cmd','t:c','ku:cmd')
+    if click_command is None:
+        press(*keys)
+    else:
+        press(*keys, click_command=click_command)
     time.sleep(.25)
     value = shell('/usr/bin/pbpaste')
     return '' if value == '__DOUMAO_CLIPBOARD_SENTINEL__' else value

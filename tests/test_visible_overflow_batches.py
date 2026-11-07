@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 from doumao.core.visible_order_state import parse_line, fit_visible_assignments
 from doumao.workflows import visible_order_rename as wf
+from doumao.core.title_edit_contract import EditResult, EditOutcome, SaveStage
 
 
 def cards(n=12):
@@ -21,9 +22,10 @@ class UI:
     def shot(self):
         return np.zeros((1200,1400,3),dtype=np.uint8)
     def check_list(self,frame): pass
-    def handle_card(self, target, frame, pos, save, rule):
+    def edit_card(self, target, frame, pos, save, rule):
         self.handled.append((pos,rule['new']))
-        return 'saved','old',rule['new']
+        return EditResult(EditOutcome.RETURNED_TO_LIST, SaveStage.LIST_RETURN_CONFIRMED,
+                          original_title='old', proposed_title=rule['new'])
 
 
 class OverflowTests(unittest.TestCase):
@@ -72,7 +74,7 @@ class OverflowTests(unittest.TestCase):
         ui=UI()
         selected,_=parse_line('3: '+' '.join('T'+str(i) for i in range(16)),truncate_excess=True,return_ignored=True)
         with patch.object(wf,'detect_visible_grid',side_effect=lambda frame:ui.cards),patch.object(wf,'emit'),patch.object(wf.time,'sleep',return_value=None):
-            state=wf.process_batch(ui,selected,trim_to_visible=True)
+            state=wf.process_batch(ui,selected,trim_to_visible=True,editor=ui.edit_card)
         self.assertEqual(len(state.completed),10)
         self.assertEqual(ui.handled,[(i,'T'+str(i-3)) for i in range(3,13)])
 
@@ -80,23 +82,23 @@ class OverflowTests(unittest.TestCase):
         ui=UI(8)
         selected,_=parse_line('3: '+' '.join('T'+str(i) for i in range(15)),truncate_excess=True,return_ignored=True)
         with patch.object(wf,'detect_visible_grid',side_effect=lambda frame:ui.cards),patch.object(wf,'emit'),patch.object(wf.time,'sleep',return_value=None):
-            state=wf.process_batch(ui,selected,trim_to_visible=True)
+            state=wf.process_batch(ui,selected,trim_to_visible=True,editor=ui.edit_card)
         self.assertEqual(state.completed,list(range(3,9)))
         self.assertEqual([p for p,_ in ui.handled],list(range(3,9)))
 
     def test_run_oversized_two_batches_no_auto_carry(self):
         ui=UI()
         lines=iter(['11: A B C D E','1: Z','退出'])
-        with patch.object(wf,'frontend',return_value=ui),patch.object(wf,'configure'),patch.object(wf,'emit'),patch.object(wf,'detect_visible_grid',side_effect=lambda _:ui.cards),patch.object(wf.time,'sleep',return_value=None):
-            wf.run(input_func=lambda _:next(lines),sleep=lambda _:None)
+        with patch.object(wf,'frontend',return_value=ui),patch.object(wf,'resolve_click_command',return_value='/fake/cliclick'),patch.object(wf,'emit'),patch.object(wf,'detect_visible_grid',side_effect=lambda _:ui.cards),patch.object(wf.time,'sleep',return_value=None):
+            wf.run(input_func=lambda _:next(lines),sleep=lambda _:None,editor=ui.edit_card)
         self.assertEqual(ui.handled,[(11,'A'),(12,'B'),(1,'Z')])
 
     def test_single_batch_oversized_only_drops_no_automatic_scroll(self):
         ui=UI()
         names=' '.join('V'+str(i) for i in range(30))
         lines=iter([names,'退出'])
-        with patch.object(wf,'frontend',return_value=ui),patch.object(wf,'configure'),patch.object(wf,'emit'),patch.object(wf,'detect_visible_grid',side_effect=lambda _:ui.cards),patch.object(wf.time,'sleep',return_value=None):
-            wf.run(input_func=lambda _:next(lines),sleep=lambda _:None)
+        with patch.object(wf,'frontend',return_value=ui),patch.object(wf,'resolve_click_command',return_value='/fake/cliclick'),patch.object(wf,'emit'),patch.object(wf,'detect_visible_grid',side_effect=lambda _:ui.cards),patch.object(wf.time,'sleep',return_value=None):
+            wf.run(input_func=lambda _:next(lines),sleep=lambda _:None,editor=ui.edit_card)
         self.assertEqual(len(ui.handled),12)
         self.assertEqual([p for p,_ in ui.handled],list(range(1,13)))
 

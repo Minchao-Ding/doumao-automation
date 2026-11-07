@@ -23,7 +23,7 @@ class StubUI:
     def card_rows(self, frame):
         return []
 
-    def handle_card(self, *args, **kwargs):
+    def edit_card(self, *args, **kwargs):
         self.changed = True
         raise AssertionError('Never edit in a diagnostic capture')
 
