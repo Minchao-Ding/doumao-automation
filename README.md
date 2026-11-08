@@ -2,91 +2,99 @@
 
 **Computer Vision–Based macOS GUI Automation for Visual Asset Library Management**
 
-Doumao Automation is a Python tool for organizing visual assets in a macOS desktop application. It combines computer vision and GUI automation to locate item cards, edit titles and metadata, and process collections through reusable workflows.
+Doumao Automation is a personal Python project for maintaining a visual asset library in a macOS desktop application. It combines screenshots, OpenCV-based recognition, and guarded GUI actions to locate items, update titles and metadata, and process batches without an official application API.
+
+The user manually opens the appropriate collection and prepares the list or search filter. The tool does not identify the subject of artwork or choose its classification automatically.
 
 ## Project Highlights
 
-| Milestone | Result |
+| Milestone | Evidence and scope |
 | --- | --- |
-| Metadata-cleanup collection | **30 items** organized |
-| Rule-based title standardization | **11 titles** automatically standardized |
-| Search-result queue renaming | **34 titles** renamed |
-| Visible-order collection | **176 items** organized |
-| Automation workflows | **4** |
-| Automated regression tests | **132 passed** |
+| Metadata cleanup | A **30-item collection** was organized in earlier macOS use |
+| Rule-based title standardization | **11 titles automatically standardized**, plus **1 manually corrected** |
+| Search-result queue renaming | **34 titles renamed** with the earlier validated workflow |
+| Visible-order batch renaming | **176 items renamed** in one macOS collection (v3.5 functional validation) |
+| CLI workflows | **4** independent workflows |
+| Automated regression suite | **282 / 282 passed** in the owner's local macOS environment after Stage 4 |
 
-## Key Features
+These milestones came from different workflows and validation periods; they are **not** a count of unique items across the project. The historical results do not mean that every workflow has been fully revalidated end to end after each refactor. The test count reflects a local `unittest` run, not GitHub Actions CI.
 
-### 1. Automated Metadata Cleanup
+## Workflows
 
-Processes item metadata through visual detection and GUI interaction.
+### 1. Metadata Cleanup
 
-- Locates item cards, detail views, and editing controls using screenshots.
-- Clears notes and removes selected tags according to the workflow rules.
-- Re-detects controls as the layout changes after each removal.
-- Saves updates and checks the return to the collection view.
+- Detects qualifying tagged cards, opens the edit interface, and verifies the original item title.
+- Clears notes and selected tags in a collection-specific workflow.
+- Re-detects controls after each tag removal instead of reusing potentially stale click points.
+- Performs one guarded Save attempt and observes the return to the list and visible tag changes.
+- Reports structured results and save stages independently of JSONL diagnostic logging.
+
+The configured cleanup workflow is **not** a generic add/remove-any-tag feature. It requires manual confirmation of the intended collection.
 
 ### 2. Rule-Based Title Standardization
 
-Reads item titles in the editor and applies configurable naming rules.
-
-- Separates title-transformation rules from GUI navigation.
-- Reads the original title and verifies the updated text before saving.
-- Processes matching items and retains other titles.
-- Supports preview and bounded batch processing.
+- Reads original titles from the editor and applies configurable text-transformation rules.
+- Separates naming rules from interface navigation and editing code.
+- Verifies the proposed title before saving, with a preview/read-only mode and bounded processing.
+- Skips out-of-scope titles and stops on ambiguous interface states.
 
 ### 3. Search-Result Queue Renaming
 
-Renames items sequentially within a search result list filtered in the desktop application.
+- Processes a search result list already filtered by the user in the application.
+- Supports exact-prefix removal and literal text replacement.
+- Verifies the title readback and that the search term no longer matches after a change.
+- Uses artwork comparison and queue-transition checks; equal titles alone do not establish item identity.
+- Stops rather than blindly retrying when a save or queue transition is uncertain.
 
-- Removes an exact prefix or replaces specified text.
-- Opens the current result, updates its title, and checks the result-list transition after saving.
-- Handles different items with identical titles.
-- Tracks completed edits, uncertain saves, and queue completion.
-- Produces structured logs and diagnostic screenshots.
+The **34 renamed titles** are from a previously validated workflow. The refactored queue has automated safety and state-transition coverage, but that historical number is not a new complete macOS acceptance run for its refactored version.
 
 See [Search-result queue design](docs/SEARCH_QUEUE.md).
 
-### 4. Visible-Order Batch Renaming (v3.5)
+### 4. Visible-Order Batch Renaming (v3.5 Functional Baseline)
 
-Renames cards in their displayed grid order using names supplied through the terminal.
+- Associates user-supplied titles with currently visible card positions, left to right and top to bottom.
+- Supports start positions such as `3:`, shorter batches, quoted names containing spaces, and inputs longer than the available grid capacity.
+- Ignores excess names for the current batch without automatically carrying them into the next batch.
+- Checks grid geometry, card order, and selected artwork fingerprints before editing.
+- Uses the most recently verified click position, reads back the new title, and does not reopen a successfully saved card.
+- Supports consecutive batches, with manual scrolling between screens.
+- Includes a **read-only** `--preview` mode that neither opens items nor saves.
 
-- Detects and orders cards from grid geometry and screenshots.
-- Accepts a one-line list of names, with an optional starting position such as `3:`.
-- Supports short batches and pasted lists longer than the available grid capacity.
-- Processes names that fit the current fully visible cards and reports any extras skipped for that batch.
-- Replaces the complete title, reads back the new value, saves, and returns to the list.
-- Supports consecutive batches in a single terminal session, with manual scrolling between screens.
-- Uses layout checks and shift-tolerant image comparison for reliable card selection.
+The workflow was used to rename a **176-item collection** on macOS. See [Visible-order usage](docs/VISIBLE_ORDER.md).
 
-The workflow was used to organize a **176-item collection** on macOS.
+## Safety Design
 
-See [Visible-order usage](docs/VISIBLE_ORDER.md).
+Screenshot-based interaction is sensitive to changing layouts and cannot rely on stable application item IDs. The implementation therefore:
 
-## Technology Stack
+- Checks foreground application, list and editor states, card geometry, and title identity at relevant stages.
+- Distinguishes **not attempted**, **attempted but unconfirmed**, and **list return confirmed** save stages. Returning to the list does **not** prove cloud sync.
+- Does not retry a Save click when its delivery or outcome is uncertain.
+- Stops when card boundaries, artwork identity, dialogs, or post-save transitions cannot be established safely.
+- Stores personal screenshots and diagnostic JSONL files outside the Git repository.
+- Retains PyAutoGUI's mouse-to-upper-left emergency stop.
 
-| Technology | Purpose |
-| --- | --- |
-| Python | Workflow orchestration and command-line interface |
-| OpenCV and NumPy | Card detection, grid geometry, and image comparison |
-| PyAutoGUI and `cliclick` | Screenshot capture and macOS GUI control |
-| Pillow | Image handling |
-| AppleScript / macOS utilities | Desktop interactions |
-| JSON | Naming rules, configuration, and operation logs |
-| `unittest` | Automated regression testing |
+Always test an unfamiliar layout with `--preview`, verify that the marked positions are correct, and manually check actual edits in the application.
 
-## Project Structure
+## Architecture
 
 ```text
 doumao-automation/
 ├── doumao/
-│   ├── __main__.py                # CLI entry point
-│   ├── title_rules.py             # Title transformations
-│   ├── rules/                     # Rule configurations
+│   ├── __main__.py                    # CLI and guarded command handling
+│   ├── title_rules.py                 # Rule-based title transformations
+│   ├── rules/                         # Collection-specific configurations
 │   ├── core/
-│   │   ├── grid_detector.py       # Card-grid detection
-│   │   ├── visible_order_state.py  # Batch parsing and layout checks
-│   │   └── ...                    # Shared GUI components
+│   │   ├── artwork.py                 # Shared image matching
+│   │   ├── grid_detector.py           # Complete 4 × 3 grid detection
+│   │   ├── partial_grid_detector.py   # Complete 4-card / 8-card layouts
+│   │   ├── grid_selection.py          # Conservative detector selection
+│   │   ├── screen_capture.py          # Shared screenshot conversion
+│   │   ├── visible_order_state.py     # Ordering, identity and stability
+│   │   ├── title_edit_contract.py     # Structured results and save stages
+│   │   ├── title_editor.py            # Shared editing transaction
+│   │   ├── title_gui.py               # macOS title GUI adapter
+│   │   ├── list_view.py               # List-view safety checks
+│   │   └── ...                        # Other navigation/metadata helpers
 │   └── workflows/
 │       ├── clean_metadata.py
 │       ├── normalize_titles.py
@@ -94,10 +102,6 @@ doumao-automation/
 │       └── visible_order_rename.py
 ├── tests/
 ├── docs/
-│   ├── SEARCH_QUEUE.md
-│   ├── VISIBLE_ORDER.md
-│   ├── DEVELOPMENT.md
-│   └── VERSIONS.md
 ├── examples/
 ├── requirements.txt
 ├── pyproject.toml
@@ -105,95 +109,111 @@ doumao-automation/
 └── README.md
 ```
 
-Each workflow has its own item-selection strategy and uses shared components for visual recognition, navigation, editing, and saving.
+Workflow-specific selection rules are separated from shared visual recognition, title editing, and save-state contracts. The code retains different GUI safety checks where combining them would change established behavior.
+
+## Technology
+
+Python 3.10+, OpenCV, NumPy, PyAutoGUI, Pillow, `cliclick`, AppleScript/macOS utilities, JSON/JSONL, and Python `unittest`.
 
 ## Getting Started
 
-### Requirements
+**Requirements:** macOS, the target desktop application, Python 3.10+, Homebrew, and Accessibility/Screen Recording permissions for the automation environment.
 
-- macOS
-- Python 3.10+
-- The target desktop library application
-- Accessibility and Screen Recording permissions
-- Homebrew and `cliclick`
-
-Install the dependencies from the project directory:
+From the repository root:
 
 ```bash
 brew install cliclick
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-```
-
-Check the environment and run the tests:
-
-```bash
 python -m doumao doctor
-python -m unittest discover -s tests -q
 ```
 
-### Visible-Order Renaming
-
-Open the target collection in the desktop application and position the list so the cards to rename are fully visible.
+Run the automated tests:
 
 ```bash
-python -m doumao visible-order
+python -m unittest discover -s tests -v
 ```
 
-Enter the new titles on one line:
+### Visible-Order Preview (No Changes)
 
-```text
-3: Sample_A Sample_B "Sample C" Sample_D
-```
-
-The example starts at the third visible card. Without a position prefix, the batch starts at the first card. Quotation marks group titles containing spaces.
-
-After submitting a batch, switch to the desktop application during the five-second countdown. The program renames the selected visible cards and then prompts for the next batch. Scroll to the next screen manually when needed.
-
-If the input contains more names than the visible positions can accommodate, the program processes the fitting names and reports the remaining count. Paste the remaining names in a later batch. Enter `退出` to finish.
-
-For a read-only card-position preview:
+Open the correct collection in the application and arrange a stable four-column grid:
 
 ```bash
 python -m doumao visible-order --preview
 ```
 
-### Other Workflows
+Enter a test name, inspect the numbered preview screenshot, and enter `退出` to finish. This mode does not edit or save.
 
-Preview card detection:
+### Visible-Order Renaming (Writes Titles)
+
+Only after verifying the selected collection and the visible positions:
 
 ```bash
-python -m doumao preview
+python -m doumao visible-order
 ```
 
-Preview rule-based title standardization:
+Example input:
+
+```text
+3: Sample_A Sample_B "Sample C"
+```
+
+The user has five seconds to switch back to the application after submitting a batch. The tool never automatically switches collections or scrolls between screens.
+
+### Other CLI Operations
+
+Read-only title-rule evaluation:
 
 ```bash
 python -m doumao titles --limit 1
 ```
 
-Run metadata cleanup or rule-based title standardization with the configured sample collection:
+Metadata cleanup (**writes and saves**; only for the configured collection, manually confirmed):
 
 ```bash
 python -m doumao clean --auto-save --confirm-folder drinks --limit 1
-python -m doumao titles --auto-save --confirm-folder drinks --limit 1
 ```
 
-Run search-result queue renaming after applying a matching search filter in the application:
+Read-only search-result queue evaluation, after manually applying the indicated filter:
 
 ```bash
-python -m doumao search-queue --mode remove-prefix --search 'DRAFT-' --prefix 'DRAFT-' --limit 1 --auto-save --confirm-selection
+python -m doumao search-queue --mode remove-prefix --search 'DRAFT-' --prefix 'DRAFT-' --limit 1
 ```
 
-See the workflow documentation for additional options and usage examples.
+Do not reuse the configured metadata-cleanup rules for unrelated collections. Additional write-mode commands require explicit CLI confirmation and appropriate verification.
 
-## Validation and Development
+## Development and Verification
 
-The project includes **132 automated tests** covering title rules, input parsing, grid detection, workflow transitions, and error handling. Development has combined automated regression testing with macOS GUI testing across metadata cleanup, title standardization, search-result queues, and visible-order renaming.
+| Stage | Scope | Regression result |
+| --- | --- | --- |
+| 0 | Baseline contracts and safe-stop regression tests | 179 / 179 |
+| 1 | Shared title editor, result contracts, GUI adapter | 214 / 214 |
+| 2 | Partial grids and safeguards against false complete-grid matches | 227 / 227 |
+| 3 | Structured metadata results and separation from JSONL logging | 255 / 255 |
+| 4 | Shared artwork comparison, detector selection, screenshot conversion | **282 / 282** |
 
-Key improvements include dynamic control detection, title readback before saving, queue-transition verification, flexible batch sizes, and shift-tolerant card comparison.
+Stage 2 also passed controlled real-save tests on four cards in a one-row layout and four cards in the second row of a two-row layout. Stage 3 passed a one-item real metadata-cleanup save with manual verification. Stage 4 passed a **12-card read-only positioning check** on macOS. Stage 4 did not repeat real saves, because its changes were limited to shared infrastructure and guarded by regression tests.
 
-The next development stage focuses on **code-structure review and targeted refactoring**: consolidating reusable GUI operations, simplifying workflow dependencies, and maintaining the tested interaction behavior.
+The automated test results are from the owner's **local Mac**, not a hosted continuous-integration system. These results do not establish compatibility with every application theme, screen size, or layout.
 
-Additional background: [Development notes](docs/DEVELOPMENT.md) · [Version notes](docs/VERSIONS.md).
+## Known Limitations
+
+- **Initial mixed layout:** When subfolder/search/filter controls appear above two complete rows of cards and a third row is partially visible, the detector may report missing or duplicate columns and **stop without opening or saving an item**. Manually scroll to a verified continuous grid and use `visible-order --preview` before writing. Fixing this is deferred to a separate stage; safe stopping does not mean this layout is already supported.
+- Grid identification assumes stable four-column cards in known interface conditions; unusual themes, scaling, incomplete loading, or occlusions may trigger a stop.
+- The legacy fallback scanner retains some theme-specific color assumptions.
+- Visually indistinguishable artworks may not provide enough evidence for automatic identity confirmation.
+- A confirmed list return is not proof of successful cloud synchronization.
+
+## Planned Work
+
+- Diagnose mixed-layout recognition using a retained **private** failure screenshot; retain conservative stop behavior.
+- Add a macOS workflow-selection interface while reusing the current Python backend.
+- Build selective tag addition/removal as a separate workflow; it is not included in the current cleanup tool.
+- Expand cross-theme support only with real screenshot evidence and focused regressions.
+
+## Development Collaboration
+
+The project owner identified practical needs, defined editing and safety rules, provided screenshots and logs, tested on macOS, verified results, and guided implementation choices. AI assisted with Python/OpenCV implementation, test design, debugging, architecture review, and incremental refactoring.
+
+Additional documentation: [Development summary](docs/DEVELOPMENT.md), [Historical versions](docs/VERSIONS.md), [Search queue](docs/SEARCH_QUEUE.md), and [Visible order](docs/VISIBLE_ORDER.md).
