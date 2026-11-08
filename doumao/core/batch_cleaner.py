@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import sys
 import time
@@ -29,6 +30,7 @@ from . import card_picker as v08
 from . import tag_scanner as scanner
 from . import navigation as navigator
 from . import metadata_editor as cleaner
+from .title_edit_contract import SaveStage
 
 ROOT = Path.home() / 'doumao-automation'
 LOG = ROOT / 'logs' / 'refactored_batch_cleaner.jsonl'
@@ -45,13 +47,59 @@ def screenshot() -> np.ndarray:
 
 
 def record(title: str, result: str, extra: dict | None = None):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    """Best-effort audit; a file error must not decide GUI operation status."""
     payload = {'time': datetime.now().isoformat(timespec='seconds'),
                'title': title, 'result': result}
     if extra:
         payload.update(extra)
-    with LOG.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        print(f'警告：单张操作日志写入失败：{exc}；继续依据操作结果判断。', flush=True)
+
+
+@dataclass(frozen=True)
+class MetadataCardResult:
+    """One card is verified on the list, not merely clicked in the editor."""
+    title: str
+    save_stage: SaveStage
+    note_before_length: int | None
+    removed_tags: int
+    tag_groups_before: int
+    tag_groups_after: int
+
+
+class MetadataCardFailure(RuntimeError):
+    """A post-click check failed; the caller can inspect the attempted Save."""
+    def __init__(self, result: cleaner.MetadataCleanResult, reason: str):
+        self.result = result
+        self.save_stage = result.save_stage
+        super().__init__(reason)
+
+
+class MetadataCardInterrupted(KeyboardInterrupt):
+    """An interrupted post-click check retains the attempted Save stage."""
+    def __init__(self, result: cleaner.MetadataCleanResult):
+        self.result = result
+        self.save_stage = result.save_stage
+        super().__init__('保存后验证被中断；状态待人工核对')
+
+
+def verify_editor_result(result: cleaner.MetadataCleanResult, title: str) -> None:
+    """Only an observed Save attempt + closed editor permits list verification."""
+    if not isinstance(result, cleaner.MetadataCleanResult):
+        raise RuntimeError('元数据清理器未返回结构化保存结果；状态不明确，停止。')
+    if result.title != title:
+        raise RuntimeError('返回的作品标题与实际读取的原标题不同；停止。')
+    if result.save_stage is not SaveStage.ATTEMPTED:
+        raise RuntimeError('清理器未报告本次保存尝试；停止。')
+    if result.edit_dialog_disappeared is not True:
+        raise RuntimeError('保存后未确认编辑弹窗消失；停止，不重复保存。')
+    if (not isinstance(result.removed_tags, int) or isinstance(result.removed_tags, bool)
+            or not 1 <= result.removed_tags <= cleaner.MAX_TAGS):
+        raise RuntimeError('清理器报告的标签删除数量不符合已验证规则；停止。')
 
 
 def save_preview(im: np.ndarray, candidate: tuple, index: int, num: int, limit: int):
@@ -166,31 +214,6 @@ def wait_for_list_after_save():
     return frame
 
 
-def new_cleaner_event(old_size: int, title: str):
-    """严格检查新增加的保存日志；不依赖历史成功记录。"""
-    if not cleaner.LOG.exists():
-        return None
-    with cleaner.LOG.open('rb') as f:
-        f.seek(old_size)
-        new_lines = f.read().decode('utf-8').splitlines()
-    events = []
-    for line in new_lines:
-        if not line.strip():
-            continue
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            raise RuntimeError('保存日志新增了无法解析的内容；本次状态不确定，停止。')
-    if len(events) != 1:
-        raise RuntimeError(f'本次应有 1 条新保存日志，实际 {len(events)} 条；请人工核对。')
-    event = events[0]
-    if (event.get('title') != title or event.get('save_clicked') is not True):
-        raise RuntimeError('保存日志中的标题或保存状态不匹配；停止。')
-    if event.get('edit_dialog_disappeared') is not True:
-        raise RuntimeError('点击保存后编辑弹窗没有消失，状态不确定，停止。')
-    return event
-
-
 def verify_tag_disappeared(before: np.ndarray, after: np.ndarray, group: tuple, old_count: int):
     """必须明确确认同屏标签组减一且原位置不再有标签；否则停止。"""
     if before.shape != after.shape:
@@ -214,7 +237,7 @@ def verify_tag_disappeared(before: np.ndarray, after: np.ndarray, group: tuple, 
     return after_count
 
 
-def run_one(index: int, limit: int) -> bool:
+def run_one(index: int, limit: int) -> MetadataCardResult | None:
     scanner.assert_app()
     before = screenshot()
     if cleaner.find_save(before) is not None or navigator.find_detail_modal(before) is not None:
@@ -222,7 +245,7 @@ def run_one(index: int, limit: int) -> bool:
     groups = scanner.scan_tag_groups(before)
     if not groups:
         print('当前屏幕没有识别到待整理的标签组，结束本次测试。', flush=True)
-        return False
+        return None
     old_count, target = v08.find_first_candidate(before)
     save_preview(before, target, index, old_count, limit)
     x0, y0, x1, y1, cx, cy = target
@@ -244,20 +267,33 @@ def run_one(index: int, limit: int) -> bool:
         raise RuntimeError(f'读取的原标题异常：{title!r}；停止。')
     print(f'已打开作品：{title!r}，开始清空备注和标签，并自动保存。', flush=True)
     record(title, 'started', {'card': index, 'tag_groups_before': old_count})
-    old_log_size = cleaner.LOG.stat().st_size if cleaner.LOG.exists() else 0
-    cleaner.clean_current(title=title, auto_save=True)
 
-    # cleaner 只声称“点击了保存按钮”；继续处理前额外检查日志、退出编辑、标签消失。
-    event = new_cleaner_event(old_log_size, title)
-    if event is None:
-        raise RuntimeError('没有读到本次保存日志；停止。')
-    frame = wait_for_list_after_save()
-    remaining = verify_tag_disappeared(before, frame, target, old_count)
+    # A nested failure already carries MetadataCleanResult via Batch 1;
+    # never replay clean_current, even when its Save click may have occurred.
+    cleaned = cleaner.clean_current(title=title, auto_save=True)
+    try:
+        verify_editor_result(cleaned, title)
+        frame = wait_for_list_after_save()
+        remaining = verify_tag_disappeared(before, frame, target, old_count)
+    except KeyboardInterrupt as exc:
+        if isinstance(cleaned, cleaner.MetadataCleanResult):
+            raise MetadataCardInterrupted(cleaned) from exc
+        raise
+    except Exception as exc:
+        if isinstance(cleaned, cleaner.MetadataCleanResult):
+            raise MetadataCardFailure(cleaned, str(exc)) from exc
+        raise
+
+    result = MetadataCardResult(
+        title=cleaned.title,
+        save_stage=SaveStage.LIST_RETURN_CONFIRMED,
+        note_before_length=cleaned.note_before_length,
+        removed_tags=cleaned.removed_tags,
+        tag_groups_before=old_count,
+        tag_groups_after=remaining,
+    )
     record(title, 'verified_on_list',
            {'card': index, 'tag_groups_after': remaining,
-            'removed_tags': event.get('removed_tags')})
+            'removed_tags': result.removed_tags})
     print(f'[{index}/{limit}] {title}：已自动点击保存，并在列表确认标签组消失；剩余 {remaining} 组。', flush=True)
-    return True
-
-
-
+    return result
