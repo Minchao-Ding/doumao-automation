@@ -21,6 +21,7 @@ import numpy as np
 import pyautogui
 
 from . import tag_scanner as scanner
+from . import screen_capture
 
 ROOT = Path.home() / 'doumao-automation'
 OUT = ROOT / 'screenshots' / 'preview_v10b_scroll_to_end.png'
@@ -30,8 +31,7 @@ pyautogui.PAUSE = 0.18
 
 def screenshot() -> np.ndarray:
     scanner.assert_app()
-    return cv2.cvtColor(np.asarray(pyautogui.screenshot().convert('RGB')),
-                        cv2.COLOR_RGB2BGR)
+    return screen_capture.capture_bgr()
 
 
 def grid_region(frame: np.ndarray) -> tuple[int, int, int, int]:

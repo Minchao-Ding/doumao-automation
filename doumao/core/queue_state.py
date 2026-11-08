@@ -10,29 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-import cv2
-import numpy as np
+from .artwork import looks_like_same_art
 
 
 class QueueUncertain(RuntimeError):
     """Post-save result could not be verified, so no retry is permitted."""
-
-
-def looks_like_same_art(a: np.ndarray, b: np.ndarray, threshold: float = .012) -> bool:
-    """Shift-tolerant thumbnail comparison; not a unique work identifier."""
-    if not isinstance(a, np.ndarray) or not isinstance(b, np.ndarray):
-        return False
-    if a.ndim != 3 or a.shape != b.shape or min(a.shape[:2]) < 25:
-        return False
-    # Compare a central crop against b, allowing the image placement to move.
-    margin = 5
-    inner = a[margin:-margin, margin:-margin]
-    if inner.size == 0:
-        return False
-    if np.array_equal(a, b):
-        return True
-    score = cv2.matchTemplate(b, inner, cv2.TM_SQDIFF_NORMED)
-    return float(cv2.minMaxLoc(score)[0]) < threshold
 
 
 def queue_transition(before: Sequence[dict[str, Any]], after: Sequence[dict[str, Any]]) -> str:
