@@ -154,8 +154,11 @@ def form_rects(im, save):
         return None
     sx, sy, sw, _ = save
     H, W = im.shape[:2]
-    # Keep sample columns inside the modal, away from outer app/content.
-    xlo, xhi = max(0, sx + round(sw * .30)), min(W, sx + round(sw * .80))
+    # Sample the form fields' right-side blank backgrounds rather than the
+    # center, where placeholder/help text can split a valid note into two
+    # short color runs. This intentionally retains the validated theme's
+    # pale-background check; other skins are not claimed to be supported.
+    xlo, xhi = max(0, sx + round(sw * .70)), min(W, sx + round(sw * .91))
     # Look through the editor's entire visible scroll content. In a narrow
     # window previous code would miss an otherwise fully visible title.
     ylo = max(0, sy - round(sw * 1.80))
