@@ -31,6 +31,7 @@ from ..core import tag_scanner as scanner
 from ..core import metadata_editor as cleaner
 from ..core import navigation as navigator
 from ..core import card_picker as selector
+from ..core.title_edit_contract import SaveStage
 
 ROOT = Path.home() / 'doumao-automation'
 LOG = ROOT / 'logs' / 'refactored_clean_metadata.jsonl'
@@ -40,10 +41,14 @@ pyautogui.PAUSE = .18
 
 
 def emit(event: str, **values):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    """JSONL is diagnostic only; an audit failure cannot undo GUI progress."""
     row = dict(time=datetime.now().isoformat(timespec='seconds'), event=event, **values)
-    with LOG.open('a', encoding='utf-8') as file:
-        file.write(json.dumps(row, ensure_ascii=False) + '\n')
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open('a', encoding='utf-8') as file:
+            file.write(json.dumps(row, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        print(f'警告：清理工作流日志写入失败：{exc}；状态以操作结果为准。', flush=True)
 
 
 def frame() -> np.ndarray:
@@ -189,31 +194,20 @@ def run(limit: int, max_scrolls: int, edge_scroll: int, scan_scroll: int):
             continue
         if candidate is not None:
             print(f'\n[{n_saved + 1}/{limit}] 当前视图识别到 {len(groups)} 组待整理标签，开始处理最靠上、最靠左的一张。', flush=True)
-            old_log_size = proven_batch.LOG.stat().st_size if proven_batch.LOG.exists() else 0
-            # 直接运行已经在 Mac 上验证成功的完整单张流程；里面会：
-            # 自动开图、识别铅笔、验证原标题、清备注、清标签、自动保存、
-            # 确认返回列表且标签组减一。任何步骤失败都抛异常并停止。
-            ok = proven_batch.run_one(n_saved + 1, limit)
-            if not ok:
-                raise RuntimeError('识别到待整理标签但单张流程未处理，状态不明确。')
+            # 单张验证必须包含 Save 尝试、返回列表及原位置标签消失。
+            # 结构化结果直接传递给外层；JSONL 只用于审计和诊断。
+            item = proven_batch.run_one(n_saved + 1, limit)
+            if not isinstance(item, proven_batch.MetadataCardResult):
+                raise RuntimeError('识别到待整理标签但单张流程没有返回已验证结果；停止。')
+            if item.save_stage is not SaveStage.LIST_RETURN_CONFIRMED:
+                raise RuntimeError('单张保存尚未确认返回列表；停止。')
             n_saved += 1
             stable = 0
             edge_retries = 0
             last_img = frame()
-            # v0.9b 成功记录包含具体标题，避免依赖屏幕 OCR 猜测。
-            title = ''
-            try:
-                with proven_batch.LOG.open('rb') as file:
-                    file.seek(old_log_size)
-                    new_rows = [json.loads(t) for t in file.read().decode('utf-8').splitlines() if t.strip()]
-                done_rows = [t for t in new_rows if t.get('result') == 'verified_on_list']
-                if len(done_rows) != 1:
-                    raise ValueError('新操作日志中没有唯一成功记录')
-                title = done_rows[0]['title']
-            except Exception as error:
-                raise RuntimeError('已执行保存，但无法可靠读取本次已保存的标题；停止以避免重复处理。') from error
-            emit('saved_verified', title=title, index=n_saved, scrolls=n_scrolls)
-            print(f'本次已成功保存 {n_saved} 张；刚完成：{title}。', flush=True)
+            emit('saved_verified', title=item.title, index=n_saved,
+                 scrolls=n_scrolls, removed_tags=item.removed_tags)
+            print(f'本次已成功保存 {n_saved} 张；刚完成：{item.title}。', flush=True)
             time.sleep(.85)
             continue
 

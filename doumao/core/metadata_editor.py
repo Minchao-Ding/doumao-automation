@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import re
@@ -28,6 +29,8 @@ import numpy as np
 import pyautogui
 from PIL import Image
 
+from .title_edit_contract import SaveStage, SingleSaveGuard
+
 ROOT = Path.home() / "doumao-automation"
 PREVIEW = ROOT / "screenshots" / "preview_clean_one.png"
 DIAGNOSTIC = ROOT / "screenshots" / "diagnostic_tag.png"
@@ -36,6 +39,40 @@ CLICK = "/opt/homebrew/bin/cliclick"
 MAX_TAGS = 5
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.18
+
+
+@dataclass
+class MetadataCleanResult:
+    """Observed single-editor cleanup; list verification belongs to the caller.
+
+    ATTEMPTED means a Save click may have been dispatched. The editor only
+    observes the Save button's disappearance, not a confirmed return to the
+    artwork list or successful cloud synchronization.
+    """
+
+    title: str
+    save_stage: SaveStage = SaveStage.NOT_ATTEMPTED
+    note_before_length: int | None = None
+    removed_tags: int | None = None
+    edit_dialog_disappeared: bool | None = None
+    log_written: bool | None = None
+    reason: str | None = None
+
+
+class MetadataCleanFailure(RuntimeError):
+    """Metadata cleanup stopped; result preserves the Save attempt boundary."""
+
+    def __init__(self, result: MetadataCleanResult):
+        self.result = result
+        super().__init__(result.reason or "metadata cleanup stopped")
+
+
+class MetadataCleanInterrupted(KeyboardInterrupt):
+    """User interruption that retains whether Save may have been dispatched."""
+
+    def __init__(self, result: MetadataCleanResult):
+        self.result = result
+        super().__init__(result.reason or "metadata cleanup interrupted")
 
 
 def shell(*args, input_text=None):
@@ -117,8 +154,11 @@ def form_rects(im, save):
         return None
     sx, sy, sw, _ = save
     H, W = im.shape[:2]
-    # Keep sample columns inside the modal, away from outer app/content.
-    xlo, xhi = max(0, sx + round(sw * .30)), min(W, sx + round(sw * .80))
+    # Sample the form fields' right-side blank backgrounds rather than the
+    # center, where placeholder/help text can split a valid note into two
+    # short color runs. This intentionally retains the validated theme's
+    # pale-background check; other skins are not claimed to be supported.
+    xlo, xhi = max(0, sx + round(sw * .70)), min(W, sx + round(sw * .91))
     # Look through the editor's entire visible scroll content. In a narrow
     # window previous code would miss an otherwise fully visible title.
     ylo = max(0, sy - round(sw * 1.80))
@@ -359,12 +399,30 @@ def scroll_to_tags(im):
     return previous, bar
 
 
-def clean_current(title: str, auto_save: bool = True):
-    """Clean the already-open editor. Called only after the parent workflow has checked title.
+def clean_current(title: str, auto_save: bool = True) -> MetadataCleanResult:
+    """Clean the open editor and report observed Save state to the caller.
 
-    This is the validated single-card algorithm, without sys.argv mutation or a
-    second command-line argument parser. All UI validation is kept intact.
+    GUI validation is unchanged. A failure after attempting Save carries an
+    ATTEMPTED result, even when the click itself raises; no Save is retried.
     """
+    result = MetadataCleanResult(title=title)
+    guard = SingleSaveGuard()
+    try:
+        return _clean_current_impl(title, auto_save, result, guard)
+    except BaseException as exc:
+        result.save_stage = guard.stage
+        result.reason = str(exc) or type(exc).__name__
+        if isinstance(exc, KeyboardInterrupt):
+            raise MetadataCleanInterrupted(result) from exc
+        if isinstance(exc, Exception):
+            raise MetadataCleanFailure(result) from exc
+        raise
+
+
+def _clean_current_impl(title: str, auto_save: bool,
+                        result: MetadataCleanResult,
+                        guard: SingleSaveGuard) -> MetadataCleanResult:
+    """Validated single-card GUI operation, with explicit result reporting."""
     from types import SimpleNamespace
     args = SimpleNamespace(title=title, auto_save=auto_save)
     if not title.strip():
@@ -390,6 +448,7 @@ def clean_current(title: str, auto_save: bool = True):
     note_before = read_field(note_rect, original)
     if len(note_before) > 256:
         raise RuntimeError('备注长度异常，停止。')
+    result.note_before_length = len(note_before)
     print(f'标题验证成功；备注现有长度 {len(note_before)}。')
     if note_before:
         click_img(note_rect[0]+note_rect[2]*.30, note_rect[1]+note_rect[3]*.55, original)
@@ -430,6 +489,7 @@ def clean_current(title: str, auto_save: bool = True):
         save_tag_diagnostic(modal, '已识别「完成」，但未唯一识别已选标签（也可能本来是 0 个）')
         raise RuntimeError('标签弹窗已打开，但标签识别失败；为避免误删已停止。截图见 diagnostic_tag.png')
     expected = len(chips)
+    result.removed_tags = 0
     print(f'已检测到同一行的 {expected} 枚选中标签，开始逐个清空。')
     first = chips[:]
     for n in range(expected, 0, -1):
@@ -456,6 +516,7 @@ def clean_current(title: str, auto_save: bool = True):
             if selected_chips(remaining, find_finish(remaining), previous=first) is not None:
                 save_tag_diagnostic(remaining, '最后一次删除后仍识别到疑似标签')
                 raise RuntimeError('最后一次删除后仍可能有标签，停止。')
+        result.removed_tags = expected - n + 1
         print(f'已删除一个；估计剩余 {n-1} 枚。', flush=True)
 
     assert_doumao()
@@ -501,7 +562,7 @@ def clean_current(title: str, auto_save: bool = True):
         print('\n清理动作完成，已在底部检测到标签栏及保存按钮；本次未点击保存。')
         print('请核对：标题未改变，备注为空，已选标签 0/5，作品分类与来源未改变，再手动保存。')
         print('预览图：', PREVIEW)
-        return
+        return result
 
     # 单张自动保存：需要 --auto-save，且前面的标题、备注、标签识别检查均通过。
     # 不会重复点击；点击不等于已经成功同步，仍需用户重新打开核对。
@@ -516,23 +577,34 @@ def clean_current(title: str, auto_save: bool = True):
     if max(abs(a-b) for a,b in zip(center_before, center_after)) > 14:
         raise RuntimeError('保存按钮移动，未点击保存。')
     print('顶部标题及备注已验证、底部标签清理通过；正在单击一次保存按钮…', flush=True)
-    click_img(*center_after, current_screen)
+    # Mark ATTEMPTED before dispatching the GUI click. An exception from
+    # click_img cannot prove whether macOS delivered the click to Doumao.
+    guard.click_once(lambda: click_img(*center_after, current_screen))
+    result.save_stage = guard.stage
     time.sleep(1.8)
     front_after = capture()
-    # 日志明确记录“已点击”，不将它误说成云端同步成功。
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    result.edit_dialog_disappeared = find_save(front_after) is None
+
+    # JSONL is an audit artifact, never the source of the observed result.
+    # Batch 2 will remove the parent workflow's legacy log-reading dependency.
     event = {'time': datetime.now().isoformat(timespec='seconds'),
-             'title': args.title, 'note_before_length': len(note_before),
-             'removed_tags': expected, 'save_clicked': True,
-             'edit_dialog_disappeared': find_save(front_after) is None}
-    with LOG.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(event, ensure_ascii=False) + '\n')
+             'title': args.title, 'note_before_length': result.note_before_length,
+             'removed_tags': result.removed_tags, 'save_clicked': True,
+             'edit_dialog_disappeared': result.edit_dialog_disappeared}
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(event, ensure_ascii=False) + '\n')
+        result.log_written = True
+    except Exception as exc:
+        result.log_written = False
+        print(f'警告：本次操作日志写入失败：{exc}；保存状态以函数结果为准。', flush=True)
+
     print('\n已自动点击一次「保存并同步作品详情」。')
-    if event['edit_dialog_disappeared']:
+    if result.edit_dialog_disappeared:
         print('编辑窗口的保存按钮已消失（界面已变化）。')
     else:
         print('仍检测到保存按钮；可能在同步、保存失败或页面未关闭，请人工检查。程序不会重复点击。')
     print('请手动重新打开本图纸，核对标题、备注为空、标签 0/5、分类未变。')
     print('操作日志：', LOG)
-
-
+    return result
