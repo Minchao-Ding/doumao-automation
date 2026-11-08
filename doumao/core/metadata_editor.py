@@ -29,6 +29,7 @@ import numpy as np
 import pyautogui
 from PIL import Image
 
+from . import screen_capture
 from .title_edit_contract import SaveStage, SingleSaveGuard
 
 ROOT = Path.home() / "doumao-automation"
@@ -90,7 +91,7 @@ def assert_doumao():
 
 
 def capture() -> np.ndarray:
-    return cv2.cvtColor(np.array(pyautogui.screenshot().convert('RGB')), cv2.COLOR_RGB2BGR)
+    return screen_capture.capture_bgr()
 
 
 def img_to_screen(x, y, im):

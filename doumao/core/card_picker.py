@@ -23,6 +23,7 @@ import pyautogui
 from . import tag_scanner as scanner
 from . import navigation as navigator
 from . import metadata_editor as cleaner
+from . import screen_capture
 
 ROOT = Path.home() / 'doumao-automation'
 PREVIEW = ROOT / 'screenshots' / 'preview_v08_candidate.png'
@@ -31,7 +32,7 @@ pyautogui.PAUSE = .18
 
 
 def screenshot():
-    return cv2.cvtColor(np.asarray(pyautogui.screenshot().convert('RGB')), cv2.COLOR_RGB2BGR)
+    return screen_capture.capture_bgr()
 
 
 def screen_click(x, y, frame):

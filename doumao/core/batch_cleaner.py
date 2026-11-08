@@ -29,6 +29,7 @@ import pyautogui
 from . import card_picker as v08
 from . import tag_scanner as scanner
 from . import navigation as navigator
+from . import screen_capture
 from . import metadata_editor as cleaner
 from .title_edit_contract import SaveStage
 
@@ -42,8 +43,7 @@ pyautogui.PAUSE = .18
 
 
 def screenshot() -> np.ndarray:
-    return cv2.cvtColor(np.asarray(pyautogui.screenshot().convert('RGB')),
-                        cv2.COLOR_RGB2BGR)
+    return screen_capture.capture_bgr()
 
 
 def record(title: str, result: str, extra: dict | None = None):
