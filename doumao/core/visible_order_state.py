@@ -9,7 +9,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-from .queue_state import looks_like_same_art
+from .artwork import looks_like_same_art
 
 
 class VisibleOrderUncertain(RuntimeError):
