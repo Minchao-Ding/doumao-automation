@@ -14,21 +14,19 @@
 """
 from __future__ import annotations
 
-import argparse
 from datetime import datetime
 import json
 from pathlib import Path
-import sys
 import time
 
 import cv2
 import numpy as np
 import pyautogui
 
-from ..core import metadata_editor as cleaner
-from ..core import navigation as nav
-from ..core import batch_cleaner as proven
 from ..core import scrolling as scroll_util
+from ..core import list_view
+from ..core.title_editor import edit_selected_card, resolve_click_command
+from ..core.title_edit_contract import EditOutcome, EditResult
 from ..core import tag_scanner as scanner
 
 ROOT = Path.home() / 'doumao-automation'
@@ -47,69 +45,6 @@ def emit(event: str, **fields):
         f.write(json.dumps(data, ensure_ascii=False) + '\n')
 
 
-def shot():
-    scanner.assert_app()
-    return proven.screenshot()
-
-
-def check_list(frame):
-    if cleaner.find_save(frame) is not None:
-        raise RuntimeError('检测到编辑弹窗，请关闭后回到饮品列表。')
-    if nav.find_detail_modal(frame) is not None:
-        raise RuntimeError('检测到作品详情弹窗，请先关闭。')
-    h, w = frame.shape[:2]
-    if w < 1300 or h < 800 or not (1.38 < w / h < 1.65):
-        raise RuntimeError('当前截图比例与已验证的 Mac 界面不一致，不自动点击。')
-
-
-def card_rows(frame):
-    """通过各列卡片内的浅蓝背景识别完整卡片，支持末排只剩两张。
-
-    不是 OCR，也不是根据标签识别。基于用户实机截图验证的四列网格。
-    返回列表 (列号, 行顶部Y, 像素指纹)。指纹只取图像，不取卡片标题。
-    """
-    h, w = frame.shape[:2]
-    left, step = .115 * w, (.691 - .115) * w / 4
-    detected = []
-    for col in range(4):
-        xs = [round(left + (col + offset) * step) for offset in (.04, .075)]
-        if xs[-1] >= w:
-            raise RuntimeError('卡片定位列超过屏幕宽度。')
-        rgb = frame[:, xs, ::-1]
-        plausible = ((rgb[:, :, 0] >= 245) & (rgb[:, :, 0] <= 251)
-                     & (rgb[:, :, 1] >= 249) & (rgb[:, :, 2] >= 251))
-        smooth = np.convolve(plausible.mean(axis=1), np.ones(21) / 21, mode='same')
-        flags = (smooth >= .55).astype(np.int8)
-        transitions = np.diff(np.r_[0, flags, 0])
-        runs = zip(np.where(transitions == 1)[0], np.where(transitions == -1)[0])
-        for top, bottom in runs:
-            top, bottom = int(top), int(bottom)
-            if not (.16*h < top < .86*h and (bottom-top) > .67*step):
-                continue
-            if (top + .94*step) > (.955*h):
-                # 下半截在屏幕外，继续滚动后再处理，绝不点击被截断的卡片。
-                continue
-            # 防止侧边栏、弹窗、列表以外的宽大浅色区域误检。
-            if not (.78*step < bottom-top < 1.25*step):
-                continue
-            x0, x1 = round(left+(col+.12)*step), round(left+(col+.90)*step)
-            y0, y1 = round(top+.06*step), round(top+.73*step)
-            art = frame[y0:y1, x0:x1]
-            if art.size == 0 or np.std(art) < 9:
-                # 未加载或全白的空卡片不处理。
-                continue
-            fp = cv2.resize(art, (60, 70), interpolation=cv2.INTER_AREA)
-            cx, cy = round(left+(col+.50)*step), round(top+.43*step)
-            if not (.13*w < cx < .70*w and .17*h < cy < .90*h):
-                continue
-            detected.append({'col': col, 'top': top, 'click': (cx,cy), 'fp': fp})
-    detected.sort(key=lambda c: (c['top'], c['col']))
-    # 正常四列网格中，每一排各列的 top 差距通常小于 2 px。
-    if len(detected) > 12:
-        raise RuntimeError(f'视觉识别到 {len(detected)} 张卡片，超过预期，停止。')
-    return detected
-
-
 def score_fp(a, b):
     return float(np.mean(cv2.absdiff(a, b)))
 
@@ -118,91 +53,7 @@ def previously_seen(fp, known):
     return any(score_fp(fp, prev) < 7.5 for prev in known)
 
 
-from ..title_rules import DEFAULT_RULE, load_rule, proposal
-
-
-def find_title_only(im, save):
-    """只识别标题框：不依赖备注高度、备注内容或标签栏。
-
-    用保存按钮作编辑弹窗的尺度锚点，找基本信息区内唯一的浅色短输入框。
-    标题位置以用户实际编辑窗口截图的相对位置进行离线校准。
-    """
-    if save is None:
-        return None
-    sx, sy, sw, _ = save
-    H, W = im.shape[:2]
-    x0 = max(0, sx + round(sw * .30))
-    x1 = min(W, sx + round(sw * .80))
-    y0 = max(0, sy - round(sw * 1.04))
-    y1 = min(H, sy - round(sw * .79))
-    if x1 <= x0 or y1 <= y0:
-        return None
-    rgb = im[y0:y1, x0:x1, ::-1].astype(np.int16)
-    r, g, b = [rgb[:, :, k] for k in range(3)]
-    pale = ((244 <= r) & (r <= 251) & (g >= 248) & (b >= 250))
-    dense = (pale.mean(axis=1) > .78).astype(np.int16)
-    trans = np.diff(np.r_[0, dense, 0])
-    found = []
-    for a, z in zip(np.where(trans == 1)[0], np.where(trans == -1)[0]):
-        top, bottom = y0 + int(a), y0 + int(z)
-        height = bottom - top
-        if not (.050 * sw < height < .125 * sw):
-            continue
-        # 原有编辑窗口中标题顶距保存按钮约为 0.88 个按钮宽度。
-        # 排除下方备注框与上方封面选择区；宁可停止也不点击不确定位置。
-        if not (sy - .995 * sw < top < sy - .805 * sw):
-            continue
-        found.append((sx, top, sw, height))
-    return found[0] if len(found) == 1 else None
-
-
-def wait_for_title_editor():
-    """只等待标题框出现；不再调用旧版要求标题+备注成对存在的函数。"""
-    last = None
-    saw_save = False
-    for _ in range(12):
-        time.sleep(.45)
-        scanner.assert_app()
-        last = shot()
-        save = cleaner.find_save(last)
-        if save is None:
-            continue
-        saw_save = True
-        title_rect = find_title_only(last, save)
-        if title_rect is not None:
-            return last, save, title_rect
-    if not saw_save:
-        raise RuntimeError('没有确认进入编辑页，未修改。')
-    print('已确认编辑弹窗，但标题尚未出现；尝试在弹窗内部向上滚动。', flush=True)
-    frame = last
-    for attempt in range(8):
-        scanner.assert_app()
-        save = cleaner.find_save(frame)
-        if save is None:
-            raise RuntimeError('滚动恢复时丢失编辑页保存按钮，未修改。')
-        sx, sy, sw, _ = save
-        px, py = cleaner.img_to_screen(sx + .52*sw, sy - .26*sw, frame)
-        pyautogui.moveTo(px, py, duration=.12)
-        pyautogui.scroll(7)
-        time.sleep(.60)
-        frame = shot()
-        save = cleaner.find_save(frame)
-        if save is None:
-            raise RuntimeError('向上滚动后未确认编辑页，未修改。')
-        rect = find_title_only(frame, save)
-        if rect is not None:
-            print(f'向上调整 {attempt+1} 次后找到标题框。', flush=True)
-            return frame, save, rect
-    raise RuntimeError('已确认编辑页，但无法唯一识别标题框；未修改。')
-
-
-def read_title_only(frame, rect):
-    title = cleaner.read_field(rect, frame)
-    if not title or len(title) > 64 or title.startswith('__DOUMAO_'):
-        raise RuntimeError(f'读取原标题异常：{title!r}')
-    if '\n' in title or '\r' in title:
-        raise RuntimeError('原标题存在换行，停止，避免输入框误定位。')
-    return title
+from ..title_rules import load_rule
 
 
 def title_gap_candidate(frame, card):
@@ -239,34 +90,33 @@ def title_gap_candidate(frame, card):
     return bool(likely), largest, typical
 
 
-def go_back_to_list():
-    """只使用 Escape 返回；如果弹窗没关闭，不猜测 X 的位置。"""
-    for _ in range(3):
-        scanner.assert_app()
-        f = shot()
-        if cleaner.find_save(f) is None and nav.find_detail_modal(f) is None:
-            return f
-        pyautogui.press('esc')
-        time.sleep(.75)
-    f = shot()
-    if cleaner.find_save(f) is not None or nav.find_detail_modal(f) is not None:
-        raise RuntimeError('Esc 未能关闭弹窗，请手动关闭后再继续；不盲目点击。')
-    return f
-
-
 def diagnostics(reason, frame=None):
-    if frame is None:
-        try:
-            frame = shot()
-        except Exception:
-            frame = None
-    if frame is not None:
-        DIAGNOSTIC.parent.mkdir(parents=True, exist_ok=True)
-        view = frame.copy()
-        cv2.putText(view, 'v1.1 TITLE DIAGNOSTIC', (14,52),
-                    cv2.FONT_HERSHEY_SIMPLEX,.8,(0,0,255),2)
-        cv2.imwrite(str(DIAGNOSTIC), view)
+    try:
+        list_view.save_title_diagnostic(DIAGNOSTIC, frame=frame)
+    except Exception:
+        # Diagnostics must not mask the original workflow error.
+        pass
     emit('stopped', reason=str(reason))
+
+
+def edit_event(name: str, **values):
+    """Preserve the established title-command messages with a shared editor."""
+    emit(name, **values)
+    index = values.get('index')
+    old = values.get('old')
+    new = values.get('proposed') if name == 'inspected' else values.get('new')
+    if name == 'inspected' and new is not None:
+        print(f'  [{index}] {old!r} → {new!r}', flush=True)
+    elif name == 'skipped':
+        print(f'  [{index}] {old!r}：标题不符合转换规则，跳过保存。', flush=True)
+    elif name == 'would_change':
+        print('  预览模式：不修改输入框，不保存。', flush=True)
+    elif name == 'save_prepared':
+        print('  新标题回读准确；本功能未操作备注、标签、分类；准备保存。', flush=True)
+    elif name == 'save_clicked':
+        print('  已点击保存；正在等待返回列表。', flush=True)
+    elif name == 'save_returned_list':
+        print('  已确认编辑弹窗关闭并返回列表。', flush=True)
 
 
 def preview(frame, cards, opened_count):
@@ -287,81 +137,13 @@ def preview(frame, cards, opened_count):
     cv2.imwrite(str(PREVIEW), vis)
 
 
-def handle_card(target, frame, number, do_save, rule):
-    """仅打开作品/修改标题，不调用 cleaner.main（后者会清备注与标签）。"""
-    cx, cy = target['click']
-    scanner.assert_app()
-    proven.v08.screen_click(cx, cy, frame)
-    detail, modal = proven.v08.wait_for_detail()
-    pen = nav.find_pencil(detail, modal)
-    if pen is None:
-        raise RuntimeError('未能唯一定位详情弹窗中的蓝色铅笔，未编辑。')
-    proven.v08.screen_click(*pen[0], detail)
-    editor, _, title_rect = wait_for_title_editor()
-    old = read_title_only(editor, title_rect)
-    new = proposal(old, rule)
-    emit('inspected', index=number, old=old, proposed=new)
-
-    if new is None:
-        print(f'  [{number}] {old!r}：标题不符合转换规则，跳过保存。', flush=True)
-        go_back_to_list()
-        emit('skipped', index=number, old=old)
-        return 'skipped', old, old
-
-    print(f'  [{number}] {old!r} → {new!r}', flush=True)
-    if not do_save:
-        print('  预览模式：不修改输入框，不保存。', flush=True)
-        go_back_to_list()
-        emit('would_change', index=number, old=old, new=new)
-        return 'preview', old, new
-
-    # 只识别标题字段。此前已经清空的备注无需读取或参与编辑框定位。
-    now = shot()
-    title_rect = find_title_only(now, cleaner.find_save(now))
-    if title_rect is None:
-        raise RuntimeError('写入前无法唯一识别标题框，未修改。')
-    original_again = read_title_only(now, title_rect)
-    if original_again != old:
-        raise RuntimeError(f'写入前标题不同：{old!r} → {original_again!r}，未修改。')
-    current = shot()
-    title_rect = find_title_only(current, cleaner.find_save(current))
-    if title_rect is None:
-        raise RuntimeError('粘贴前标题框定位失败，未修改。')
-    x, y, w, h = title_rect
-    cleaner.click_img(x+w*.30, y+h*.55, current)
-    cleaner.shell('/usr/bin/pbcopy', input_text=new)
-    cleaner.press('kd:cmd', 't:a', 'ku:cmd', 'kd:cmd', 't:v', 'ku:cmd')
-    time.sleep(.65)
-    scanner.assert_app()
-
-    after, _, after_rect = wait_for_title_editor()
-    actual = read_title_only(after, after_rect)
-    if actual != new:
-        raise RuntimeError(f'写入后标题回读不一致：{actual!r} ≠ {new!r}；未保存。')
-    print('  新标题回读准确；本功能未操作备注、标签、分类；准备保存。', flush=True)
-    latest = shot()
-    button = cleaner.find_save(latest)
-    if button is None or find_title_only(latest, button) is None:
-        raise RuntimeError('保存前未能确认编辑页及标题框，未保存。')
-    bx, by, bw, bh = button
-    # 保存前不滚动、不操作标签或分类。
-    cleaner.click_img(bx+bw*.50, by+bh*.50, latest)
-    emit('save_clicked', index=number, old=old, new=new)
-    print('  已点击保存；正在等待返回列表。', flush=True)
-    back = proven.wait_for_list_after_save()
-    check_list(back)
-    emit('save_returned_list', index=number, old=old, new=new)
-    print('  已确认编辑弹窗关闭并返回列表。', flush=True)
-    return 'saved', old, new
-
-
 def scroll_once(before, scroll, xy):
     scanner.assert_app()
     pyautogui.moveTo(*xy, duration=.12)
     pyautogui.scroll(-scroll)
     time.sleep(.85)
-    after = shot()
-    check_list(after)
+    after = list_view.shot()
+    list_view.check_list(after)
     if before.shape != after.shape:
         raise RuntimeError('滚动后截图尺寸改变。')
     return after, scroll_util.change_fraction(before, after)
@@ -378,11 +160,11 @@ def run(args):
     print('模式：' + ('自动保存' if args.auto_save else '只读预览，不输入/保存'))
     print('请把目标文件夹列表滚到最顶部、关闭弹窗。5 秒内切到豆猫。',flush=True)
     time.sleep(5)
-    first = shot()
-    check_list(first)
+    first = list_view.shot()
+    list_view.check_list(first)
     sw, sh = pyautogui.size()
     scroll_xy = (round(sw*.365), round(sh*.57))
-    initial_cards = card_rows(first)
+    initial_cards = list_view.card_rows(first)
     first_flagged = sum(title_gap_candidate(first, c)[0] for c in initial_cards)
     print(f'首屏完整卡片 {len(initial_cards)} 张；视觉字距提示 {first_flagged} 张（仅供诊断，不参与跳过）。', flush=True)
     if args.expect_visible is not None and len(initial_cards) != args.expect_visible:
@@ -391,6 +173,7 @@ def run(args):
     if args.list_preview:
         print(f'只读列表预览已完成（未打开作品）：{PREVIEW}', flush=True)
         return
+    click_command = resolve_click_command()
     emit('session_started', limit=args.limit, auto_save=args.auto_save,
          first_visible=first_flagged, current_screen_only=args.current_screen_only)
     seen = []  # 已打开检查的缩略图指纹
@@ -399,11 +182,11 @@ def run(args):
     stable = 0
     bottom = False
     while inspected < args.limit:
-        frame = shot()
-        check_list(frame)
+        frame = list_view.shot()
+        list_view.check_list(frame)
         if frame.shape != first.shape:
             raise RuntimeError('运行期间截图分辨率变化，停止。')
-        cards = card_rows(frame)
+        cards = list_view.card_rows(frame)
         for c in cards:
             if not previously_seen(c['fp'], scanned):
                 scanned.append(c['fp'])
@@ -415,13 +198,21 @@ def run(args):
             target = new_cards[0]
             print(f'本屏 {len(cards)} 张完整卡片，尚未读取真实标题 {len(new_cards)} 张；'
                   f'现在检查第 {inspected+1} 张。',flush=True)
-            status, old, new = handle_card(target, frame, inspected+1, args.auto_save, rule)
+            edit = edit_selected_card(
+                target, frame, inspected+1, args.auto_save, rule,
+                click_command=click_command, emit=edit_event)
+            if not isinstance(edit, EditResult):
+                raise RuntimeError('共享编辑器没有返回结构化结果，已停止。')
+            if edit.outcome is EditOutcome.RETURNED_TO_LIST and args.auto_save:
+                changed += 1
+            elif edit.outcome is EditOutcome.SKIPPED:
+                skips += 1
+            elif edit.outcome is EditOutcome.PREVIEW and not args.auto_save:
+                pass
+            else:
+                raise RuntimeError(f'标题编辑状态不符合当前模式：{edit.outcome.value}，已停止。')
             seen.append(target['fp'])
             inspected += 1
-            if status == 'saved':
-                changed += 1
-            elif status == 'skipped':
-                skips += 1
             stable = 0
             print(f'进度：已检查 {inspected}，已改名 {changed}，跳过 {skips}。',flush=True)
             time.sleep(.45)
@@ -439,8 +230,8 @@ def run(args):
         emit('scroll', index=nscrolls, difference=round(change,5), stable=stable)
         if stable >= 3:
             time.sleep(1.4)
-            check = shot()
-            check_list(check)
+            check = list_view.shot()
+            list_view.check_list(check)
             if scroll_util.change_fraction(after, check) < .006:
                 bottom = True
                 break

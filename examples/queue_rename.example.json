@@ -1,0 +1,6 @@
+{
+  "mode": "remove-prefix",
+  "search": "DRAFT-",
+  "prefix": "DRAFT-",
+  "limit": 1
+}

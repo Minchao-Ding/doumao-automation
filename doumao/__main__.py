@@ -30,6 +30,19 @@ def build_parser():
     title.add_argument('--current-screen-only',action='store_true')
     title.add_argument('--expect-visible',type=int,default=None)
     title.add_argument('--expected-changes',type=int,default=None)
+    visible=sub.add_parser('visible-order', help='交互式可视区域顺序改名（完整覆盖标题）')
+    visible.add_argument('--preview', action='store_true', help='仅查看位置映射，不打开作品或保存')
+    queue=sub.add_parser('search-queue', help='对当前手动搜索结果逐张改名：去前缀或替换文字')
+    queue.add_argument('--mode', choices=('remove-prefix','replace'))
+    queue.add_argument('--search', help='用户已在豆猫中手动输入的搜索词')
+    queue.add_argument('--prefix', help='remove-prefix：需要删除的完整前缀')
+    queue.add_argument('--old', help='replace：要替换的文字')
+    queue.add_argument('--new', help='replace：新文字')
+    queue.add_argument('--limit', default=None, help='成功修改张数上限，正整数或 all，默认 1')
+    queue.add_argument('--auto-save', action='store_true', help='明确允许真实写入')
+    queue.add_argument('--config', type=str, help='JSON 任务参数，本地私有配置无需提交')
+    queue.add_argument('--confirm-selection', action='store_true',
+                       help='人工确认已打开正确文件夹并设置搜索过滤')
     return parser
 
 
@@ -59,6 +72,62 @@ def main():
             expect_visible=args.expect_visible, expected_changes=None,
             list_preview=True)
         return guarded(lambda: normalize_titles.run(readargs), normalize_titles.diagnostics)
+    if args.command == 'visible-order':
+        from .workflows import visible_order_rename as workflow
+        return guarded(lambda: workflow.run(preview_only=args.preview), workflow.diagnostic)
+    if args.command == 'search-queue':
+        settings = {}
+        if args.config:
+            import json
+            try:
+                settings = json.loads(Path(args.config).expanduser().read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError) as exc:
+                parser.error(f'配置文件无法读取：{exc}')
+            allowed = {'mode', 'search', 'prefix', 'old', 'new', 'limit'}
+            if not isinstance(settings, dict) or not set(settings).issubset(allowed):
+                parser.error('配置 JSON 必须是仅包含 mode/search/prefix/old/new/limit 的对象')
+        for key in ('mode', 'search', 'prefix', 'old', 'new', 'limit'):
+            if getattr(args, key) is None:
+                setattr(args, key, settings.get(key))
+        if args.limit is None:
+            args.limit = '1'
+        else:
+            args.limit = str(args.limit)
+        if args.mode not in ('remove-prefix','replace'):
+            parser.error('需要 --mode remove-prefix / replace，或提供 --config')
+        if not isinstance(args.search, str) or not args.search.strip():
+            parser.error('必须传入非空 --search，并提前在应用中手动搜索')
+        if args.mode == 'remove-prefix':
+            if not args.prefix:
+                parser.error('remove-prefix 需要 --prefix')
+            rule = {'rule_type': 'remove_prefix', 'prefix': args.prefix,
+                    'search_must_disappear': args.search}
+        else:
+            if not args.old or args.new is None or args.old == args.new:
+                parser.error('replace 需要不同的 --old 与 --new')
+            rule = {'rule_type': 'replace_text', 'old': args.old, 'new': args.new,
+                    'search_must_disappear': args.search}
+        from .title_rules import transform_text
+        # Static validation; actual title-specific proof occurs before Save.
+        try:
+            transform_text('__PREFLIGHT__', {k:v for k,v in rule.items()
+                            if k != 'search_must_disappear'})
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.limit != 'all':
+            try:
+                limit = int(args.limit)
+            except ValueError:
+                parser.error('--limit 必须是正整数或 all')
+            if limit < 1:
+                parser.error('--limit 必须大于 0')
+        else:
+            limit = None
+        if args.auto_save and not args.confirm_selection:
+            parser.error('真实保存必须带 --confirm-selection，确认当前筛选已经手动设置好')
+        from .workflows import search_queue_rename as workflow
+        return guarded(lambda: workflow.run(rule=rule, limit=limit,
+                       auto_save=args.auto_save, search=args.search), workflow.diagnostic)
     if not args.confirm_folder and args.auto_save:
         parser.error('真实保存必须增加 --confirm-folder drinks，表示已人工确认当前饮品文件夹。')
     if args.command=='clean':
