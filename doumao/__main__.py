@@ -158,7 +158,23 @@ def guarded(fn, diagnostic, cleanup=False):
         fn()
     except (KeyboardInterrupt, SystemExit) as error:
         if isinstance(error,SystemExit): raise
-        print('用户已终止。关闭任何未保存的编辑弹窗以放弃更改。')
+        if cleanup:
+            # Metadata cleanup can be interrupted after a Save click. Preserve
+            # the stage in the user-facing stop message instead of implying
+            # that closing the editor always discards the changes.
+            stage = getattr(error, 'save_stage', None)
+            if stage is None:
+                stage = getattr(getattr(error, 'result', None), 'save_stage', None)
+            if stage == 'not_attempted':
+                print('用户已终止。本次未尝试保存；若仍在编辑页，可关闭未保存的修改。')
+            elif stage == 'attempted_unconfirmed':
+                print('用户已终止。保存点击已尝试，结果尚未确认；请人工核对当前作品，不要直接重跑。')
+            elif stage == 'list_return_confirmed':
+                print('用户已终止。已观察到保存后返回列表，但不代表云端同步完成；请核对作品，不要直接重跑。')
+            else:
+                print('用户已终止。无法确认本次是否尝试保存；请人工核对当前作品，不要直接重跑。')
+        else:
+            print('用户已终止。关闭任何未保存的编辑弹窗以放弃更改。')
         raise SystemExit(130) from error
     except Exception as error:
         if cleanup:
