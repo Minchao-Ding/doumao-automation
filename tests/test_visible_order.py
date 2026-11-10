@@ -1,5 +1,7 @@
 """Tests of new visible-grid logic, without macOS GUI or real titles."""
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch, Mock
 import numpy as np
 
@@ -102,6 +104,17 @@ class FakeUI:
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
+        self._test_runtime = tempfile.TemporaryDirectory(prefix="doumao-visible-test-")
+        self.addCleanup(self._test_runtime.cleanup)
+        runtime = Path(self._test_runtime.name)
+        for key, value in (
+            ("RUNTIME", runtime),
+            ("LOG", runtime / "visible_order_events.jsonl"),
+            ("DIAGNOSTIC", runtime / "visible_order_diagnostic.png"),
+        ):
+            patcher = patch.object(wf, key, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.cards=[card(c,200+c%2,1+c) for c in range(4)]
         self.events=[]
     def run_batch(self,ui,line):
@@ -138,6 +151,7 @@ class WorkflowTests(unittest.TestCase):
             return result
         ui.edit_card=shifted
         with self.assertRaises(VisibleOrderUncertain):self.run_batch(ui,'A B')
+        self.assertTrue((wf.RUNTIME / 'visible_order_capture_failed.png').is_file())
         self.assertEqual(ui.handled,[(1,True,'A')])
 
     def test_start_two(self):

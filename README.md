@@ -13,7 +13,7 @@ Doumao Automation is a personal Python project that uses OpenCV, screenshots, an
 | Search-result queue renaming | **34 titles** renamed |
 | Visible-order batch renaming | **176 items** renamed in one collection |
 | CLI workflows | **4** |
-| Automated regression tests | **282/282 passed** after Stage 4 |
+| Automated regression tests | **331/331 passed** after Stage 5 |
 
 ## Key Features
 
@@ -159,14 +159,15 @@ Use `python -m doumao --help` and each command's `--help` for the available opti
 | 2 | 4/8/12-card grid recognition and safeguards | 227/227 |
 | 3 | Structured metadata results and save-state tracking | 255/255 |
 | 4 | Shared image matching, grid selection, and screenshot conversion | **282/282** |
+| 5 | Unified visible-card layout recognition, clipped-thumbnail validation, and test isolation | **331/331** |
 
 Validation combines local macOS `unittest` runs with real application checks: Stage 2 verified two four-card save scenarios, Stage 3 verified a one-item metadata cleanup save, and Stage 4 verified a 12-card read-only position preview. The milestone counts above come from different historical workflows; neither the local test suite nor these checks establish compatibility with every GUI layout or theme.
 
 ## Known Limitation and Next Steps
 
-An initial folder view containing subfolders, two complete card rows, and a partially visible third row may fail grid validation. The observed failure stopped without opening or saving items. For now, scroll to a continuous, fully visible grid and confirm the mapping with `visible-order --preview` before editing.
+Stage 5 recognizes verified four-column gallery layouts, including partial final rows and certain clipped thumbnails with at least 75% of the inferred artwork region visible. Ambiguous layouts stop safely. A specific layout with approximately 50% cropping at both ends remains unverified in the complete macOS preview workflow. If detection stops, manually adjust the scroll position and run `--preview` again.
 
-Future work includes targeted mixed-layout recognition, a macOS workflow-selection interface, selective tag editing, and evidence-based multi-theme support.
+Future work includes safe automatic scrolling with cross-screen continuity, a macOS workflow-selection interface, selective tag editing, and evidence-based multi-theme support.
 
 ## Development Collaboration
 

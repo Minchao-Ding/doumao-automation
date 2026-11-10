@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from functools import partial
 
+from ..core.gallery_layout import detect_gallery_layout
 from ..core.grid_detector import GridDetectionError, detect_visible_grid
 from ..core.grid_selection import select_visible_card_candidates
 from ..core.partial_grid_detector import detect_partial_grid
@@ -63,6 +64,7 @@ def capture(ui):
         ui.check_list(frame)
         raw_cards = select_visible_card_candidates(
             frame,
+            layout_detector=detect_gallery_layout,
             full_detector=detect_visible_grid,
             partial_detector=detect_partial_grid,
             legacy_detector=lambda current_frame: ui.card_rows(current_frame),

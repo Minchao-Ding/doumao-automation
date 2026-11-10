@@ -21,3 +21,9 @@ logs/
 screenshots/
 diagnostics/
 *.log
+
+# Never commit original user gallery screenshots or private layout diagnostics.
+tests/private_fixtures/
+PHASE4_MIXED_LAYOUT_FAILURE.png
+visible_order_capture_failed.png
+visible_order_preview.png
