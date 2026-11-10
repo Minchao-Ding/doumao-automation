@@ -2,7 +2,9 @@
 
 These are simulator tests: no macOS GUI clicks or real user content.
 """
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -57,6 +59,19 @@ def run(ui, names):
 
 
 class FlexibleBatchTests(unittest.TestCase):
+    def setUp(self):
+        self._test_runtime = tempfile.TemporaryDirectory(prefix="doumao-visible-test-")
+        self.addCleanup(self._test_runtime.cleanup)
+        runtime = Path(self._test_runtime.name)
+        for key, value in (
+            ("RUNTIME", runtime),
+            ("LOG", runtime / "visible_order_events.jsonl"),
+            ("DIAGNOSTIC", runtime / "visible_order_diagnostic.png"),
+        ):
+            patcher = patch.object(wf, key, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_user_can_enter_one_two_three_or_twelve_names(self):
         self.assertEqual([a.position for a in parse_line('3: 甲')],[3])
         self.assertEqual([a.position for a in parse_line('6: 甲 乙')],[6,7])
@@ -85,6 +100,7 @@ class FlexibleBatchTests(unittest.TestCase):
              patch.object(wf.time,'sleep',return_value=None):
             with self.assertRaisesRegex(VisibleOrderUncertain,'超过三行完整卡片'):
                 wf.process_batch(ui,parse_line('3: 甲 乙 丙 丁'), editor=ui.edit_card)
+        self.assertTrue((wf.RUNTIME / 'visible_order_capture_failed.png').is_file())
         stop = next(data for event,data in captured if event=='batch_stopped')
         self.assertEqual(stop['completed'],[3,4,5])
         self.assertIsNone(stop['pending'])
