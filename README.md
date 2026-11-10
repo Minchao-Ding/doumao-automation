@@ -40,8 +40,9 @@ See [Search-result queue design](docs/SEARCH_QUEUE.md).
 
 - Assigns user-supplied names to visible card positions, ordered left to right and top to bottom.
 - Supports starting positions such as `3:`, short batches, quoted names containing spaces, and ignoring excess names beyond the current grid.
-- Checks card geometry, position stability, and image identity before edits. Supports successive batches with manual scrolling.
-- Provides `--preview` to inspect numbered card positions without opening or saving items.
+- Uses unified four-column layout recognition to handle validated partial final rows and clipped thumbnails, with image-based click-point calibration.
+- Rechecks card geometry, position stability, and artwork identity before edits. Ambiguous layouts stop safely without guessing target positions.
+- Supports successive batches with manual scrolling and provides `--preview` to inspect numbered positions without opening or saving items.
 
 See [Visible-order usage](docs/VISIBLE_ORDER.md).
 
@@ -61,6 +62,7 @@ doumao-automation/
 │   ├── rules/                      # Collection-specific configuration
 │   ├── core/
 │   │   ├── artwork.py              # Shared image comparison
+│   │   ├── gallery_layout.py        # Unified four-column gallery recognition
 │   │   ├── grid_detector.py        # 12-card full-grid detection
 │   │   ├── partial_grid_detector.py # 4/8-card grid detection
 │   │   ├── grid_selection.py       # Detection and fallback order
@@ -161,16 +163,12 @@ Use `python -m doumao --help` and each command's `--help` for the available opti
 | 4 | Shared image matching, grid selection, and screenshot conversion | **282/282** |
 | 5 | Unified visible-card layout recognition, clipped-thumbnail validation, and test isolation | **331/331** |
 
-Validation combines local macOS `unittest` runs with real application checks: Stage 2 verified two four-card save scenarios, Stage 3 verified a one-item metadata cleanup save, and Stage 4 verified a 12-card read-only position preview. The milestone counts above come from different historical workflows; neither the local test suite nor these checks establish compatibility with every GUI layout or theme.
+Validation combines local macOS `unittest` runs with real application checks. Stage 2 verified two four-card save scenarios; Stage 3 verified a one-item metadata cleanup save; Stage 4 verified a 12-card read-only position preview; and Stage 5 verified representative 8-, 10-, and 12-card read-only layouts. These results do not establish compatibility with every GUI layout or theme.
 
 ## Known Limitation and Next Steps
 
 Stage 5 recognizes verified four-column gallery layouts, including partial final rows and certain clipped thumbnails with at least 75% of the inferred artwork region visible. Ambiguous layouts stop safely. A specific layout with approximately 50% cropping at both ends remains unverified in the complete macOS preview workflow. If detection stops, manually adjust the scroll position and run `--preview` again.
 
 Future work includes safe automatic scrolling with cross-screen continuity, a macOS workflow-selection interface, selective tag editing, and evidence-based multi-theme support.
-
-## Development Collaboration
-
-The project owner defined requirements, editing rules, and safety boundaries; supplied real screenshots and logs; performed macOS tests; and verified outcomes. AI assisted with Python/OpenCV implementation, debugging, test design, and incremental refactoring.
 
 Additional notes: [Development summary](docs/DEVELOPMENT.md), [Historical versions](docs/VERSIONS.md), [Search queue](docs/SEARCH_QUEUE.md), and [Visible order](docs/VISIBLE_ORDER.md).
